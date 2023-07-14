@@ -5,7 +5,7 @@ pub mod server;
 pub mod client;
 
 pub use server::SmppServer;
-pub use server::SmppServerHandler;
+pub use server::SmppServerListener;
 
 pub use common::*;
 

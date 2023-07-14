@@ -1,8 +1,12 @@
+use std::{net::TcpStream, io::{Error, Write}};
+
+use num_traits::FromPrimitive;
+
 /// The general format of an SMPP PDU consists of a PDU header followed by a PDU body
 /// 
 /// The SMPP Header is a mandatory part of every SMPP PDU and must always be present. The
 /// SMPP PDU Body is optional and may not be included with every SMPP PDU.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CommandHeader {
 
     /// The command_length parameter indicates the length in octets of the SMPP message. The SMPP
@@ -96,7 +100,7 @@ pub (crate) enum CommandId {
     data_sm_resp = 0x80000103,
 }
 
-#[derive(Debug, PartialEq, FromPrimitive)]
+#[derive(Debug, PartialEq, FromPrimitive, ToPrimitive)]
 pub enum SmppError {
     ESME_ROK = 0x00000000, // No Error
     ESME_RINVMSGLEN = 0x00000001, // Message Length is invalid
@@ -162,8 +166,6 @@ pub enum SmppError {
 }
 
 fn encode_bind_response(header: CommandHeader, system_id: Option<String>, sc_interface_version: Option<u8>) -> Vec<u8> {
-    println!("encode_bind_response");
-
     let command_status = header.command_status;
 
     let mut buffer: Vec<u8> = Vec::with_capacity(header.command_length as usize);
@@ -198,7 +200,7 @@ fn parse_c_octet_string(bytes: Vec<u8>, maximum_length: usize) -> Result<String,
     // First we find the position of the 0x00 byte
     if let Some(index) = bytes.iter().position(|&r| r == 0x00) {
         if index <= maximum_length {
-            String::from_utf8(bytes[0..index].to_vec()).map_err(|x| SmppError::ESME_RINVPARLEN)
+            String::from_utf8(bytes[0..index].to_vec()).map_err(|_x| SmppError::ESME_RINVPARLEN)
         } else {
             // The C-Octet-String is too long
             Err(SmppError::ESME_RINVPARLEN)
@@ -242,7 +244,7 @@ fn decode_bind_request(header: CommandHeader, pdu: &Vec<u8>) -> Result<CommonBin
 
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct bind_transmitter {
     header: CommandHeader,
     pub system_id: String,
@@ -295,7 +297,7 @@ impl bind_transmitter {
     
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct bind_transmitter_resp {
     header: CommandHeader,
     pub system_id: Option<String>,
@@ -303,6 +305,11 @@ pub struct bind_transmitter_resp {
 }
 
 impl bind_transmitter_resp {
+
+    pub fn is_success(&self) -> bool { self.header.command_status == SmppError::ESME_ROK as u32}
+    pub fn command_status(&self) -> u32 { self.header.command_status }
+    pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
+
     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<bind_transmitter_resp, SmppError> {
         todo!()
     }
@@ -312,7 +319,7 @@ impl bind_transmitter_resp {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct bind_receiver {
     header: CommandHeader,
     pub system_id: String,
@@ -365,7 +372,7 @@ impl bind_receiver {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct bind_receiver_resp {
     header: CommandHeader,
     pub system_id: Option<String>,
@@ -373,6 +380,16 @@ pub struct bind_receiver_resp {
 }
 
 impl bind_receiver_resp {
+
+                                    
+    pub fn send(self, stream: &mut TcpStream) -> Result<usize, Error> { 
+        let encoded = self.encode();
+        stream.write(&encoded)
+    }
+    pub fn is_success(&self) -> bool { self.header.command_status == SmppError::ESME_ROK as u32}
+    pub fn command_status(&self) -> u32 { self.header.command_status }
+    pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
+
     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<bind_receiver_resp, SmppError> {
         todo!()
     }
@@ -380,7 +397,7 @@ impl bind_receiver_resp {
     pub fn encode(self) -> Vec<u8> { encode_bind_response(self.header, self.system_id, self.sc_interface_version) }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct bind_transceiver {
     header: CommandHeader,
     pub system_id: String,
@@ -431,7 +448,7 @@ impl bind_transceiver {
 
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct bind_transceiver_resp {
     header: CommandHeader,
     pub system_id: Option<String>,
@@ -439,6 +456,11 @@ pub struct bind_transceiver_resp {
 }
 
 impl bind_transceiver_resp {
+
+    pub fn is_success(&self) -> bool { self.header.command_status == SmppError::ESME_ROK as u32}
+    pub fn command_status(&self) -> u32 { self.header.command_status }
+    pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
+
     pub fn decode(pdu: &Vec<u8>) -> Result<bind_transceiver_resp, SmppError> {
         todo!()
     }

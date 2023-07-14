@@ -1,6 +1,8 @@
-use std::{net::{IpAddr, TcpListener, SocketAddr}, thread::{self, JoinHandle}, time::Duration, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, io::{self, BufRead, Write}};
+use std::{net::{IpAddr, TcpListener, SocketAddr, Shutdown}, thread::{self, JoinHandle}, time::Duration, sync::{atomic::{AtomicBool, Ordering}, Arc}, io::{self, BufRead, Write}};
 
-use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError, submit_sm_resp, submit_sm, data_sm, data_sm_resp}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp};
+use log::{info, error};
+
+use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp};
 
 
 mod state;
@@ -11,26 +13,33 @@ pub struct SmppServer {
     handle: Option<JoinHandle<()>>,
     alive: Arc<AtomicBool>,
     handler: Arc<SmppServerListener>,
+    session_init_timer: u64,
+    enquire_link_timer: u64,
+    inactivity_timer: u64,
+    response_timer: u64,
+}
+
+pub struct SmppConnectionInformation<'a> {
+    pub server_address: &'a SocketAddr,
+    pub client_address: &'a SocketAddr,
 }
 
 pub struct SmppServerListener {
-    pub on_bind_transmitter: fn(bind_transmitter) -> bind_transmitter_resp,
-    pub on_bind_receiver: fn(bind_receiver) -> bind_receiver_resp,
-    pub on_bind_transceiver: fn(bind_transceiver) -> bind_transceiver_resp,
-    pub on_unbind: fn(unbind) -> unbind_resp,
-}
-
-pub trait SmppServerHandler {
-    fn bind_transmitter(bind_transmitter: bind_transmitter) -> bind_transmitter_resp where Self: Sized;
-    fn submit_sm(submit_sm: submit_sm ) -> submit_sm_resp where Self: Sized;
-    fn data_sm(data_sm: data_sm) -> data_sm_resp where Self: Sized;
+    pub on_bind_transmitter: fn(bind_transmitter, &SmppConnectionInformation) -> bind_transmitter_resp,
+    pub on_bind_receiver: fn(bind_receiver, &SmppConnectionInformation) -> bind_receiver_resp,
+    pub on_bind_transceiver: fn(bind_transceiver, &SmppConnectionInformation) -> bind_transceiver_resp,
+    pub on_unbind: fn(unbind, &SmppConnectionInformation) -> unbind_resp,
 }
 
 // See https://stackoverflow.com/a/42044143
 impl SmppServer {
 
     pub fn new(address: IpAddr, port: u16, handler: Arc<SmppServerListener>) -> SmppServer {
-        SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler }
+        SmppServer::new_with_default_timers(address, port, handler, 5000, 30000, 60000, 2000)
+    } 
+
+    pub fn new_with_default_timers(address: IpAddr, port: u16, handler: Arc<SmppServerListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64,) -> SmppServer {
+        SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer }
     } 
 
     pub fn start(&mut self) {
@@ -39,16 +48,15 @@ impl SmppServer {
             panic!("Can not start server twice")
         }
 
-        println!("Starting smpp server on {}:{}", self.address, self.port);
+        info!("Starting smpp server on {}:{}", self.address, self.port);
         self.alive.store(true, Ordering::SeqCst);
 
         let socket_address = SocketAddr::new(self.address, self.port); // Will be moved out
-
         let alive = self.alive.clone();
         let handler = self.handler.clone();
+        let session_init_timer = self.session_init_timer;
 
         self.handle = Some(thread::spawn(move || {
-
             let listener = TcpListener::bind(socket_address).unwrap();
             listener.set_nonblocking(true).expect("Cannot set non-blocking");
 
@@ -56,69 +64,99 @@ impl SmppServer {
                 for stream in listener.incoming() {
                     if alive.load(Ordering::SeqCst) {
                         match stream {
-                            Ok(stream) => {
+                            Ok(mut stream) => {
                                 let handler = handler.clone();
                                 thread::spawn(move || {
-                                    let mut session_state = OPEN { stream };
-                                    println!("Got a connection from {}, waiting for bind", session_state.stream.peer_addr().unwrap());
-
-                                    let stream = &mut session_state.stream;
-
+                                    let session_state = OPEN { };
+                                    let connection_information = SmppConnectionInformation {
+                                        server_address: &socket_address,
+                                        client_address: &stream.peer_addr().unwrap(),
+                                    };
+                                    
+                                    info!("Got a connection from {} on server {}, waiting {}ms for bind", connection_information.client_address, connection_information.server_address, session_init_timer);
                                     stream.set_nonblocking(false).expect("Can not set to non-blocking");
-                                    stream.set_read_timeout(Some(Duration::new(2, 0))).expect("Can not set read time-out");
+                                    stream.set_read_timeout(Some(Duration::from_millis(session_init_timer))).expect("Can not set read time-out");
 
                                     // Wrap the stream in a BufReader, so we can use the BufRead methods
                                     let mut reader = io::BufReader::new(stream);
+                                    let first_read = reader.fill_buf();
 
-                                    // Read current current data in the TcpStream
-                                    let pdu: Vec<u8> = reader.fill_buf().expect("stuff").to_vec();
-                                    let pdu_length = pdu.len();
-                                    
-                                    // Try read sequence_number in case we need a generic_nack.
-                                    // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
-                                    let potential_seq_no = if pdu_length >= 16 { u32::from_be_bytes(pdu[12..16].try_into().expect("Can not read sequence_number")) } else { 0 };
-                                    let command_header = CommandHeader::decode(&pdu);
+                                    if first_read.is_ok() {
+                                        let pdu = first_read.unwrap().to_vec();
+                                        let pdu_length = pdu.len();
 
-                                    match command_header {
-                                        Ok(header) => {
-                                            if header.command_id == CommandId::bind_receiver as u32 {
-                                                let decoded: Result<bind_receiver, SmppError> = bind_receiver::decode(header, &pdu);
-                                                let response: Vec<u8> = if decoded.is_ok() {
-                                                    (handler.on_bind_receiver)(decoded.unwrap()).encode()
+                                        // Try read sequence_number in case we need a generic_nack.
+                                        // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
+                                        let potential_seq_no = if pdu_length >= 16 { u32::from_be_bytes(pdu[12..16].try_into().expect("Can not read sequence_number")) } else { 0 };
+                                        let command_header = CommandHeader::decode(&pdu);
+
+                                        match command_header {
+                                            Ok(header) => {
+                                                if header.command_id == CommandId::bind_receiver as u32 {
+                                                    match bind_receiver::decode(header, &pdu) {
+                                                        Ok(bind_receiver) => {
+                                                            let bind_receiver_resp = (handler.on_bind_receiver)(bind_receiver.clone(), &connection_information);
+                                                            let session_state = session_state.bind_receiver(reader, bind_receiver, bind_receiver_resp, &connection_information);
+                                                            // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
+                                                            if session_state.is_ok() {
+                                                                session_state.unwrap().read_loop(); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            } 
+                                                        },
+                                                        Err(error) => {
+                                                            error!("Connection from {} on server {}, unable to decode bind_receiver", connection_information.client_address, connection_information.server_address);
+                                                            let error = bind_receiver::generic_reject(potential_seq_no, error).encode();
+                                                            reader.into_inner().write(&error).expect("Can not write to stream");
+                                                        }
+                                                    }
+                                                } else if header.command_id == CommandId::bind_transmitter as u32 {
+                                                    match bind_transmitter::decode(header, &pdu) {
+                                                        Ok(bind_transmitter) => {
+                                                            let bind_transmitter_resp = (handler.on_bind_transmitter)(bind_transmitter.clone(), &connection_information);
+                                                            let session_state = session_state.bind_transmitter(reader, bind_transmitter, &bind_transmitter_resp, &connection_information);
+                                                            // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
+                                                            if session_state.is_ok() {
+                                                                session_state.unwrap().read_loop(); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                        } 
+                                                        },
+                                                        Err(error) => {
+                                                            error!("Connection from {} on server {}, unable to decode bind_receiver", connection_information.client_address, connection_information.server_address);
+                                                            let error = bind_transmitter::generic_reject(potential_seq_no, error).encode();
+                                                            reader.into_inner().write(&error).expect("Can not write to stream");
+                                                        }
+                                                    }
+                                                } else if header.command_id == CommandId::bind_transceiver as u32 {
+                                                    match bind_transceiver::decode(header, &pdu) {
+                                                        Ok(bind_transceiver) => {
+                                                            let bind_transceiver_resp = (handler.on_bind_transceiver)(bind_transceiver.clone(), &connection_information);
+                                                            let session_state = session_state.bind_transceiver(reader, bind_transceiver, &bind_transceiver_resp, &connection_information);
+                                                            // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
+                                                            if session_state.is_ok() {
+                                                                session_state.unwrap().read_loop(); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            } 
+                                                        },
+                                                        Err(error) => {
+                                                            error!("Connection from {} on server {}, unable to decode bind_receiver", connection_information.client_address, connection_information.server_address);
+                                                            let error = bind_transceiver::generic_reject(potential_seq_no, error).encode();
+                                                            reader.into_inner().write(&error).expect("Can not write to stream");
+                                                        }
+                                                    }
                                                 } else {
-                                                    bind_receiver::generic_reject(potential_seq_no, decoded.unwrap_err()).encode()
-                                                };
-                                                reader.into_inner().write(&response).expect("Can not write to stream");
-                                            } else if header.command_id == CommandId::bind_transmitter as u32 {
-                                                let decoded: Result<bind_transmitter, SmppError> = bind_transmitter::decode(header, &pdu);
-                                                let response: Vec<u8> = if decoded.is_ok() {
-                                                    (handler.on_bind_transmitter)(decoded.unwrap()).encode()
-                                                } else {
-                                                    bind_transmitter::generic_reject(potential_seq_no, decoded.unwrap_err()).encode()
-                                                };
-                                                reader.into_inner().write(&response).expect("Can not write to stream");
-                                            } else if header.command_id == CommandId::bind_transceiver as u32 {
-                                                let decoded = bind_transceiver::decode(header, &pdu);
-                                                let response: Vec<u8> = if decoded.is_ok() {
-                                                    (handler.on_bind_transceiver)(decoded.unwrap()).encode()
-                                                } else {
-                                                    let error = decoded.unwrap_err();
-                                                    println!("error {:?}", error);
-                                                    bind_transceiver::generic_reject(potential_seq_no, error).encode()
-                                                };
-                                                reader.into_inner().write(&response).expect("Can not write to stream");
-                                            } else {
-                                                println!("command_id {} not implemented", header.command_id);
-                                                // Only allow bind commands, if not a bind command tell ESME about invalid bind status
-                                                let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVBNDSTS as u32, sequence_number: potential_seq_no };
+                                                    // Only allow bind commands, if not a bind command tell ESME about invalid bind status
+                                                    error!("Did not expect command_id {} as bind not established yet, sending ESME_RINVBNDSTS in generick_nack", header.command_id);
+                                                    let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVBNDSTS as u32, sequence_number: potential_seq_no };
+                                                    reader.into_inner().write(&generic_nack.encode()).expect("Can not write to stream");
+                                                }
+                                            },
+                                            Err(error) => {
+                                                error!("Unable to decode command_header for PDU, sending {:?} in generic_nack", error); 
+                                                let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
                                                 reader.into_inner().write(&generic_nack.encode()).expect("Can not write to stream");
-                                            }
-                                        },
-                                        Err(error) => {
-                                            println!("generic_nack {:?}", error); // Send generic_nack
-                                            let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
-                                            reader.into_inner().write(&generic_nack.encode()).expect("Can not write to stream");
-                                        } 
+                                            } 
+                                        }
+
+                                    } else {
+                                        error!("Unable to read initial SMPP PDU from {} on server {}, after waiting {}ms for bind, TCP connection will be closed", connection_information.client_address, connection_information.server_address, session_init_timer);
+                                        reader.into_inner().shutdown(Shutdown::Both).expect("Unable to close TCP connection");
                                     }
                                 });
                             }
@@ -129,7 +167,6 @@ impl SmppServer {
                                 break;
                             }
                             Err(e) => panic!("encountered IO error: {e}"),
-                            //None => todo!(),
                         }
                     } else {
                         break;
@@ -141,13 +178,15 @@ impl SmppServer {
     }
 
     pub fn stop(&mut self) {
-        println!("Stopping smpp server");
+        info!("Stopping smpp server");
         self.alive.store(false, Ordering::SeqCst);
         self.handle
             .take().expect("Called stop on non-running thread")
             .join().expect("Could not join spawned thread");
     }
 }
+
+
 
 impl Drop for SmppServer {
     fn drop(&mut self) {
