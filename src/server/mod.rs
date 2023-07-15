@@ -65,7 +65,7 @@ impl SmppServer {
                 for stream in listener.incoming() {
                     if alive.load(Ordering::SeqCst) {
                         match stream {
-                            Ok(mut stream) => {
+                            Ok(stream) => {
                                 let handler = handler.clone();
                                 thread::spawn(move || {
                                     let session_state = OPEN { };

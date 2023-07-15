@@ -1,8 +1,6 @@
 mod commands;
-use std::{net::TcpStream, io::{Error, Write}};
 
 use log::error;
-use num_traits::FromPrimitive;
 
 // Re-exports
 pub use commands::bind_transmitter::*;
