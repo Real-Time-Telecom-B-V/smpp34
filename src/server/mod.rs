@@ -2,7 +2,7 @@ use std::{net::{IpAddr, TcpListener, SocketAddr, Shutdown}, thread::{self, JoinH
 
 use log::{info, error};
 
-use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm, submit_sm_resp};
+use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack};
 
 
 mod state;
@@ -29,7 +29,7 @@ pub struct SmppServerListener {
     pub on_bind_receiver: fn(bind_receiver, &SmppConnectionInformation) -> bind_receiver_resp,
     pub on_bind_transceiver: fn(bind_transceiver, &SmppConnectionInformation) -> bind_transceiver_resp,
     pub on_unbind: fn(unbind, &SmppConnectionInformation) -> unbind_resp,
-    pub on_submit_sm: fn(submit_sm, &SmppConnectionInformation) -> submit_sm_resp,
+    pub on_submit_sm: fn(submit_sm, &SmppConnectionInformation) ->  submit_sm_resp,
 }
 
 // See https://stackoverflow.com/a/42044143
@@ -144,13 +144,14 @@ impl SmppServer {
                                                 } else {
                                                     // Only allow bind commands, if not a bind command tell ESME about invalid bind status
                                                     error!("Did not expect command_id {} as bind not established yet, sending ESME_RINVBNDSTS in generick_nack", header.command_id);
-                                                    let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVBNDSTS as u32, sequence_number: potential_seq_no };
+
+                                                    let generic_nack = generic_nack::new(SmppError::ESME_RINVBNDSTS, potential_seq_no);
                                                     reader.into_inner().write(&generic_nack.encode()).expect("Can not write to stream");
                                                 }
                                             },
                                             Err(error) => {
                                                 error!("Unable to decode command_header for PDU, sending {:?} in generic_nack", error); 
-                                                let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
+                                                let generic_nack = generic_nack::new(error, potential_seq_no);
                                                 reader.into_inner().write(&generic_nack.encode()).expect("Can not write to stream");
                                             } 
                                         }
