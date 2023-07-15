@@ -1,5 +1,13 @@
 use crate::{CommandHeader, SmppError, CommandId};
 
+/// 
+/// This is a generic negative acknowledgement to an SMPP PDU submitted with an invalid
+/// message header. A generic_nack response is returned in the following cases:
+/// 
+/// * Invalid command_length If the receiving SMPP entity, on decoding an SMPP PDU, detects an invalid command_length (either too short or too long), it should assume that the data is corrupt. In such cases a generic_nack PDU must be returned to the message originator.
+/// * Unknown command_id If an unknown or invalid command_id is received, a generic_nack PDU must also be returned to the originator.
+/// 
+/// See '4.3 “GENERIC_NACK” PDU' at <https://smpp.org/SMPP_v3_4_Issue1_2.pdf>
 #[derive(Debug, Clone)]
 pub struct generic_nack {
     pub(crate) header: CommandHeader
@@ -7,10 +15,22 @@ pub struct generic_nack {
 
 impl generic_nack {
 
+    /// Construct a generic_nack primitive
+    /// 
+    /// # Arguments
+    /// 
+    /// * `error` - command_status to be sent back (expecting an error code here)
+    /// * `seq_no` - sequence number (if it could be read from the incoming PDU otherwise 0)
     pub fn new(error: SmppError, seq_no: u32) -> generic_nack {
         generic_nack { header: CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: seq_no } }
     }
 
+    /// Decode a generic_nack PDU
+    /// 
+    /// # Arguments
+    /// 
+    /// * `header` - already decoded Command Header which is only used for validation as generic_nack should not have a body
+    /// * `pdu` - the complete PDU used for extra validation
     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<generic_nack, SmppError> {
         if header.command_id == CommandId::generic_nack as u32 {
             if pdu.len() == 16 {
@@ -26,6 +46,7 @@ impl generic_nack {
         }
     }
 
+    /// Encode a generic_nack based on inner command header
     pub fn encode(self) -> Vec<u8> {
         self.header.encode()
     }
