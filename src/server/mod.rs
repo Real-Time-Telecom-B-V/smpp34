@@ -2,7 +2,7 @@ use std::{net::{IpAddr, TcpListener, SocketAddr, Shutdown}, thread::{self, JoinH
 
 use log::{info, error};
 
-use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp};
+use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm, submit_sm_resp};
 
 
 mod state;
@@ -18,10 +18,10 @@ pub struct SmppServer {
     inactivity_timer: u64,
     response_timer: u64,
 }
-
-pub struct SmppConnectionInformation<'a> {
-    pub server_address: &'a SocketAddr,
-    pub client_address: &'a SocketAddr,
+#[derive(Debug, Clone)]
+pub struct SmppConnectionInformation {
+    pub server_address: SocketAddr,
+    pub client_address: SocketAddr,
 }
 
 pub struct SmppServerListener {
@@ -29,6 +29,7 @@ pub struct SmppServerListener {
     pub on_bind_receiver: fn(bind_receiver, &SmppConnectionInformation) -> bind_receiver_resp,
     pub on_bind_transceiver: fn(bind_transceiver, &SmppConnectionInformation) -> bind_transceiver_resp,
     pub on_unbind: fn(unbind, &SmppConnectionInformation) -> unbind_resp,
+    pub on_submit_sm: fn(submit_sm, &SmppConnectionInformation) -> submit_sm_resp,
 }
 
 // See https://stackoverflow.com/a/42044143
@@ -69,8 +70,8 @@ impl SmppServer {
                                 thread::spawn(move || {
                                     let session_state = OPEN { };
                                     let connection_information = SmppConnectionInformation {
-                                        server_address: &socket_address,
-                                        client_address: &stream.peer_addr().unwrap(),
+                                        server_address: socket_address,
+                                        client_address: stream.peer_addr().unwrap(),
                                     };
                                     
                                     info!("Got a connection from {} on server {}, waiting {}ms for bind", connection_information.client_address, connection_information.server_address, session_init_timer);
@@ -96,7 +97,7 @@ impl SmppServer {
                                                     match bind_receiver::decode(header, &pdu) {
                                                         Ok(bind_receiver) => {
                                                             let bind_receiver_resp = (handler.on_bind_receiver)(bind_receiver.clone(), &connection_information);
-                                                            let session_state = session_state.bind_receiver(reader, bind_receiver, bind_receiver_resp, &connection_information);
+                                                            let session_state = session_state.bind_receiver(reader, bind_receiver, bind_receiver_resp, &connection_information, handler);
                                                             // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                             if session_state.is_ok() {
                                                                 session_state.unwrap().read_loop(); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
@@ -112,7 +113,7 @@ impl SmppServer {
                                                     match bind_transmitter::decode(header, &pdu) {
                                                         Ok(bind_transmitter) => {
                                                             let bind_transmitter_resp = (handler.on_bind_transmitter)(bind_transmitter.clone(), &connection_information);
-                                                            let session_state = session_state.bind_transmitter(reader, bind_transmitter, &bind_transmitter_resp, &connection_information);
+                                                            let session_state = session_state.bind_transmitter(reader, bind_transmitter, &bind_transmitter_resp, &connection_information, handler);
                                                             // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                             if session_state.is_ok() {
                                                                 session_state.unwrap().read_loop(); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
@@ -128,7 +129,7 @@ impl SmppServer {
                                                     match bind_transceiver::decode(header, &pdu) {
                                                         Ok(bind_transceiver) => {
                                                             let bind_transceiver_resp = (handler.on_bind_transceiver)(bind_transceiver.clone(), &connection_information);
-                                                            let session_state = session_state.bind_transceiver(reader, bind_transceiver, &bind_transceiver_resp, &connection_information);
+                                                            let session_state = session_state.bind_transceiver(reader, bind_transceiver, &bind_transceiver_resp, &connection_information, handler);
                                                             // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                             if session_state.is_ok() {
                                                                 session_state.unwrap().read_loop(); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.

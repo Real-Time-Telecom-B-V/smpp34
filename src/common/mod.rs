@@ -1,5 +1,6 @@
-use std::{net::TcpStream, io::{Error, Write}};
+use std::{net::TcpStream, io::{Error, Write}, ops::IndexMut};
 
+use log::{warn, error};
 use num_traits::FromPrimitive;
 
 /// The general format of an SMPP PDU consists of a PDU header followed by a PDU body
@@ -37,6 +38,7 @@ pub struct CommandHeader {
 impl CommandHeader {
     pub fn decode(pdu: &Vec<u8>) -> Result<CommandHeader, SmppError> {
         if pdu.len() < 16 { // PDU Command Header is mandatory, we need at least 16 bytes
+            error!("PDU can not contain a valid SMPP header as it's shorter than 16 bytes");
             Err(SmppError::ESME_RINVCMDLEN)
         } else {
             let command_header = CommandHeader {
@@ -47,6 +49,7 @@ impl CommandHeader {
             };
 
             if pdu.len() != command_header.command_length as usize {
+                error!("PDU length {} does not match command_length {}", pdu.len(), command_header.command_length);
                 Err(SmppError::ESME_RINVMSGLEN)
             } else {
                 Ok(command_header)
@@ -196,20 +199,50 @@ struct CommonBindRequestParameters {
     address_range: String
 }
 
+fn parse_next_int(pdu: &Vec<u8>, position: usize) -> Result<u8, SmppError> {
+    if position < pdu.len() {
+        Ok(pdu[position])
+    } else {
+        error!("Can not parse next int, insufficient bytes left");
+        Err(SmppError::ESME_RINVPARLEN)
+    }
+}
+
 fn parse_c_octet_string(bytes: Vec<u8>, maximum_length: usize) -> Result<String, SmppError> {
     // First we find the position of the 0x00 byte
     if let Some(index) = bytes.iter().position(|&r| r == 0x00) {
         if index <= maximum_length {
             String::from_utf8(bytes[0..index].to_vec()).map_err(|_x| SmppError::ESME_RINVPARLEN)
         } else {
-            // The C-Octet-String is too long
+            error!("C-Octet-String is too long");
             Err(SmppError::ESME_RINVPARLEN)
         }
     } else {
-        // Can not find null byte at all, C-Octet-String not terminated?!
+        error!("Can not find null byte at all, C-Octet-String not terminated?!");
         Err(SmppError::ESME_RINVPARLEN)
     }
 }
+
+fn parse_octet_string(bytes: Vec<u8>, supposed_length: usize, maximum_length: usize) -> Result<String, SmppError> {
+    if supposed_length > maximum_length {
+        error!("Octet-String supposed length {} is over maximum allowed length {}", supposed_length, maximum_length);
+        Err(SmppError::ESME_RINVPARLEN)
+    }
+    else if bytes.len() < supposed_length {
+        error!("Octet-String supposed length {} is too long for amount of remaining bytes {}", supposed_length, bytes.len());
+        Err(SmppError::ESME_RINVPARLEN)
+    } else {
+        String::from_utf8(bytes[0..supposed_length].to_vec()).map_err(|_x| SmppError::ESME_RINVPARLEN)
+    }
+}
+
+/*fn parse_optional_u8(bytes: Vec<u8>, tag) -> Result<Option<u16>, SmppError> {
+    Err(SmppError::ESME_RINVOPTPARAMVAL)
+}
+
+fn parse_optional_u16(bytes: Vec<u8>) -> Result<u16, SmppError> {
+    Err(SmppError::ESME_RINVOPTPARAMVAL)
+}*/
 
 fn decode_bind_request(header: CommandHeader, pdu: &Vec<u8>) -> Result<CommonBindRequestParameters, SmppError> {
     // CommondHeader decode method makes sure that PDU length matches the command_length so no need to check this again
@@ -223,9 +256,9 @@ fn decode_bind_request(header: CommandHeader, pdu: &Vec<u8>) -> Result<CommonBin
     // Then we expect the system_type which is a C-Octet-String terminated by 0 and maximum 13 in length
     let system_type = parse_c_octet_string(pdu[16 + system_id.len() + password.len() + 2..].to_vec(), 13)?;
 
-    let interface_version = pdu[16 + system_id.len() + password.len() + system_type.len() + 3];
-    let addr_ton = pdu[16 + system_id.len() + password.len() + system_type.len() + 4];
-    let addr_npi = pdu[16 + system_id.len() + password.len() + system_type.len() + 5];
+    let interface_version = parse_next_int(pdu, 16 + system_id.len() + password.len() + system_type.len() + 3)?;
+    let addr_ton = parse_next_int(pdu, 16 + system_id.len() + password.len() + system_type.len() + 4)?;
+    let addr_npi = parse_next_int(pdu, 16 + system_id.len() + password.len() + system_type.len() + 5)?;
 
     // Then we expect the address_range which is a C-Octet-String terminated by 0 and maximum 41 in length
     let address_range = parse_c_octet_string(pdu[16 + system_id.len() + password.len() + system_type.len() + 6..].to_vec(), 41)?;
@@ -357,7 +390,7 @@ impl bind_receiver {
         bind_receiver_resp { header: CommandHeader {
             command_length: 16,
             command_id: CommandId::bind_receiver_resp as u32,
-            command_status: SmppError::ESME_ROK as u32,
+            command_status: error as u32,
             sequence_number: self.header.sequence_number,
         }, system_id: None, sc_interface_version: None}
     }
@@ -468,27 +501,218 @@ impl bind_transceiver_resp {
     pub fn encode(self) -> Vec<u8> { encode_bind_response(self.header, self.system_id, self.sc_interface_version) }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct outbind {
-
+    header: CommandHeader,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct unbind {
-
+    header: CommandHeader,
 }
 
-#[derive(Debug)]
+impl unbind {
+    pub fn decode(header: CommandHeader, _pdu: &Vec<u8>) -> Result<unbind, SmppError> {
+        // TODO check if body is empty
+        Ok(unbind {
+            header,
+        })
+    }
+
+    pub fn encode(self) -> Vec<u8> {
+        todo!()
+    }
+
+    pub fn accept(self) -> unbind_resp {
+        unbind_resp { header: CommandHeader {
+            command_length: 16, // No body
+            command_id: CommandId::unbind_resp as u32,
+            command_status: SmppError::ESME_ROK as u32,
+            sequence_number: self.header.sequence_number,
+        }}
+    }
+
+    pub fn reject(self, error: SmppError) -> unbind_resp {
+        unbind_resp { header: CommandHeader {
+            command_length: 16,
+            command_id: CommandId::unbind_resp as u32,
+            command_status: error as u32,
+            sequence_number: self.header.sequence_number,
+        } }
+    }
+
+    pub fn generic_reject(sequence_number: u32, error: SmppError) -> unbind_resp {
+        unbind_resp  { header: CommandHeader {
+            command_length: 16,
+            command_id: CommandId::unbind_resp as u32,
+            command_status: error as u32,
+            sequence_number,
+        }}
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct unbind_resp {
+    header: CommandHeader,
 
 }
 
-pub struct submit_sm  where Self: Sized {
+impl unbind_resp {
 
+    pub fn is_success(&self) -> bool { self.header.command_status == SmppError::ESME_ROK as u32}
+    pub fn command_status(&self) -> u32 { self.header.command_status }
+    pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
+
+    pub fn encode(self) -> Vec<u8> { self.header.encode() }
 }
 
-pub struct submit_sm_resp  where Self: Sized {
+#[derive(Debug, Clone)]
+pub struct submit_sm  {
+    header: CommandHeader,
+    /// The service_type parameter can be used to indicate the SMS Application service associated with the message.
+    /// Specifying the service_type allows the ESME to
+    /// • avail of enhanced messaging services such as “replace by service” type
+    /// • to control the teleservice used on the air interface.
+    /// Set to NULL for default SMSC settings.
+    pub service_type: String,
+    pub source_addr_ton: u8,
+    pub source_addr_npi: u8,
+    pub source_addr: String,
+    pub dest_addr_ton: u8,
+    pub dest_addr_npi: u8,
+    pub destination_addr: String,
+    pub esm_class: u8,
+    pub protocol_id: u8,
+    pub priority_flag: u8,
+    pub schedule_delivery_time: String,
+    pub validity_period: String,
+    pub registered_delivery: u8,
+    pub replace_if_present_flag: u8,
+    pub data_coding: u8,
+    pub sm_default_msg_id: u8,
+    pub sm_length: u8,
+    pub short_message: String,
+    pub user_message_reference: Option<u16>,
+}
+
+impl submit_sm {
+    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<submit_sm, SmppError> {
+        warn!("Decode not fully implemented yet, optional parameters not available");
     
+        let service_type = parse_c_octet_string(pdu[16..].to_vec(), 6)?;
+
+        let start = 16 + service_type.len();
+        let source_addr_ton =  parse_next_int(pdu, start + 1)?;
+        let source_addr_npi =  parse_next_int(pdu, start + 2)?;
+        let source_addr = parse_c_octet_string(pdu[start + 3..].to_vec(), 21)?;
+
+        let start = start + 2 + source_addr.len() + 1;
+        let dest_addr_ton =  parse_next_int(pdu, start + 1)?;
+        let dest_addr_npi =  parse_next_int(pdu, start + 2)?;
+        let destination_addr = parse_c_octet_string(pdu[start + 3..].to_vec(), 21)?;
+
+        let start = start + 2 + destination_addr.len() + 1;
+        let esm_class = parse_next_int(pdu, start + 1)?;
+        let protocol_id = parse_next_int(pdu, start + 2)?;
+        let priority_flag = parse_next_int(pdu, start + 3)?;
+        let schedule_delivery_time =  parse_c_octet_string(pdu[start + 4..].to_vec(), 17)?;
+
+        let start = start + 3 + schedule_delivery_time.len() + 1;
+        let validity_period = parse_c_octet_string(pdu[start..].to_vec(), 17)?;
+
+        let start = start + validity_period.len() + 1;
+        let registered_delivery = parse_next_int(pdu, start + 1)?;
+        let replace_if_present_flag = parse_next_int(pdu, start + 2)?;
+        let data_coding = parse_next_int(pdu, start + 3)?;
+        let sm_default_msg_id = parse_next_int(pdu, start + 4)?;
+        let sm_length = parse_next_int(pdu, start + 5)?;
+        let short_message = parse_octet_string(pdu[start + 6..].to_vec(), sm_length as usize, 254)?;
+
+        
+
+        Ok(submit_sm {
+            header,
+            service_type,
+            source_addr_ton,
+            source_addr_npi,
+            source_addr,
+            dest_addr_ton,
+            dest_addr_npi,
+            destination_addr,
+            esm_class,
+            protocol_id,
+            priority_flag,
+            schedule_delivery_time,
+            validity_period,
+            registered_delivery,
+            replace_if_present_flag,
+            data_coding,
+            sm_default_msg_id,
+            sm_length,
+            short_message,
+            user_message_reference: None
+        })
+    }
+
+    pub fn encode(self) -> Vec<u8> {
+        todo!()
+    }
+
+    pub fn accept(self, message_id: String) -> submit_sm_resp {
+        if message_id.len() > 65 {
+            panic!("message_id has a maximum length of 65 characters")
+        }
+
+        submit_sm_resp { header: CommandHeader {
+            command_length: 16 + message_id.len() as u32 + 1, // message_id is a C-Octet-String
+            command_id: CommandId::submit_sm_resp as u32,
+            command_status: SmppError::ESME_ROK as u32,
+            sequence_number: self.header.sequence_number,
+        }, message_id: Some(message_id) }
+    }
+
+    pub fn reject(self, error: SmppError) -> submit_sm_resp {
+        submit_sm_resp { header: CommandHeader {
+            command_length: 16,
+            command_id: CommandId::submit_sm_resp as u32,
+            command_status: error as u32,
+            sequence_number: self.header.sequence_number,
+        }, message_id: None }
+    }
+
+    pub fn generic_reject(sequence_number: u32, error: SmppError) -> submit_sm_resp {
+        submit_sm_resp { header: CommandHeader {
+            command_length: 16,
+            command_id: CommandId::submit_sm_resp as u32,
+            command_status: error as u32,
+            sequence_number,
+        }, message_id: None }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct submit_sm_resp  {
+    header: CommandHeader,
+    message_id: Option<String>
+}
+
+impl submit_sm_resp {
+
+    pub fn is_success(&self) -> bool { self.header.command_status == SmppError::ESME_ROK as u32}
+    pub fn command_status(&self) -> u32 { self.header.command_status }
+    pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
+
+    pub fn encode(self) -> Vec<u8> { 
+        let mut buffer:Vec<u8> = Vec::with_capacity(self.header.command_length.try_into().unwrap());
+        buffer.append(&mut self.header.encode());
+
+        if let Some(message_id) = self.message_id {
+            buffer.append(&mut message_id.as_bytes().to_vec());
+            buffer.push(0x00); // Terminate C-Octet-String
+        }
+
+        buffer
+     }
 }
 
 pub struct submit_sm_multi {
