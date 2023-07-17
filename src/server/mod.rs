@@ -1,6 +1,7 @@
-use std::{net::{IpAddr, TcpListener, SocketAddr, Shutdown}, thread::{self, JoinHandle}, time::Duration, sync::{atomic::{AtomicBool, Ordering}, Arc}, io::{self, BufRead, Write}};
+use std::{net::{IpAddr, TcpListener, SocketAddr, Shutdown}, thread::{self}, time::Duration, sync::{atomic::{AtomicBool, Ordering}, Arc}, io::{self, BufRead, Write}};
 
 use log::{info, error};
+use tokio::task::{JoinHandle, self};
 
 use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack};
 
@@ -57,7 +58,7 @@ impl SmppServer {
         let handler = self.handler.clone();
         let session_init_timer = self.session_init_timer;
 
-        self.handle = Some(thread::spawn(move || {
+        self.handle = Some(tokio::spawn(async move {
             let listener = TcpListener::bind(socket_address).unwrap();
             listener.set_nonblocking(true).expect("Cannot set non-blocking");
 
@@ -67,7 +68,7 @@ impl SmppServer {
                         match stream {
                             Ok(stream) => {
                                 let handler = handler.clone();
-                                thread::spawn(move || {
+                                task::block_in_place (move || {
                                     let session_state = OPEN { };
                                     let connection_information = SmppConnectionInformation {
                                         server_address: socket_address,
@@ -184,7 +185,7 @@ impl SmppServer {
         self.alive.store(false, Ordering::SeqCst);
         self.handle
             .take().expect("Called stop on non-running thread")
-            .join().expect("Could not join spawned thread");
+            .abort();
     }
 }
 
