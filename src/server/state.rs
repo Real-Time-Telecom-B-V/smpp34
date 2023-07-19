@@ -146,6 +146,8 @@ impl BOUND_TRX {
                 info!("enquire_link to {} on server {} with sequence_number {}", self.connection_information.client_address, self.connection_information.server_address, sequence_number);
                 block_on(enquire_link_writer.lock().unwrap().write(&enquire_link::new(sequence_number).encode())).expect("Unable to send enquire_link");
                 interval.tick().await;
+
+                // TODO we need to implement response_timer!! Do we need to record outstanding operations?!
             }
             info!("enquire_link timer for {} on server {} stopped", self.connection_information.client_address, self.connection_information.server_address);
         });
@@ -184,9 +186,25 @@ impl BOUND_TRX {
                                         writer.lock().unwrap().write(&error).await.expect("Unable to write to stream");
                                     }
                                 }
+                            } else if header.command_id == CommandId::enquire_link as u32 {
+                                match enquire_link::decode(header, &pdu) {
+                                    Ok(enquire_link) => {
+                                        info!("enquire_link from {} on server {} with sequence_number {}", self.connection_information.client_address, self.connection_information.server_address, potential_seq_no);
+                                        let enquire_link_resp = enquire_link.accept();
+                                        writer.lock().unwrap().write(&enquire_link_resp.encode()).await.expect("Unable to write to stream");
+                                    },
+                                    Err(error) => {
+                                        error!("Connection from {} on server {}, unable to decode enquire_link", self.connection_information.client_address, self.connection_information.server_address);
+                                        let error = submit_sm::generic_reject(potential_seq_no, error).encode();
+                                        writer.lock().unwrap().write(&error).await.expect("Unable to write to stream");
+                                    }
+                                }
                             } else if header.command_id == CommandId::enquire_link_resp as u32 {
                                 // Just log! We do not need to handle this as there is a timer on the socket read this already triggers inactivity_timeout
                                 info!("enquire_link_resp from {} on server {}", self.connection_information.client_address, self.connection_information.server_address);
+
+                                // TODO however we should verify if we got an answer??!?!
+                                
                             } else if header.command_id == CommandId::unbind as u32 {
                                 match unbind::decode(header, &pdu) {
                                     Ok(unbind) => {
