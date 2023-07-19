@@ -10,6 +10,8 @@ pub use commands::outbind::*;
 pub use commands::unbind::*;
 pub use commands::submit_sm::*;
 
+pub use commands::enquire_link::*;
+
 pub use commands::generic_nack::*;
 
 
@@ -335,14 +337,6 @@ pub struct replace_sm {
 
 pub struct replace_sm_resp {
     
-}
-
-pub struct enquire_link {
-
-}
-
-pub struct enquire_link_resp {
-
 }
 
 pub struct alert_notification {

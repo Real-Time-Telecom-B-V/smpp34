@@ -5,4 +5,6 @@ pub mod outbind;
 pub mod unbind;
 pub mod submit_sm;
 
+pub mod enquire_link;
+
 pub mod generic_nack;
