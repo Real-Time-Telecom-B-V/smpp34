@@ -34,7 +34,6 @@ pub struct SmppServerListener {
     pub on_submit_sm: fn(submit_sm, &SmppConnectionInformation) ->  submit_sm_resp,
 }
 
-// See https://stackoverflow.com/a/42044143
 impl SmppServer {
 
     pub fn new(address: IpAddr, port: u16, handler: Arc<SmppServerListener>) -> SmppServer {
@@ -103,7 +102,7 @@ impl SmppServer {
                                                         let session_state = block_on(session_state.bind_receiver(stream, bind_receiver, bind_receiver_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
-                                                            session_state.unwrap().read_loop(); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         } 
                                                     },
                                                     Err(error) => {
@@ -119,7 +118,7 @@ impl SmppServer {
                                                         let session_state = block_on(session_state.bind_transmitter(stream, bind_transmitter, &bind_transmitter_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
-                                                            session_state.unwrap().read_loop(); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                     } 
                                                     },
                                                     Err(error) => {
