@@ -68,7 +68,7 @@ impl bind_transmitter_resp {
     pub fn command_status(&self) -> u32 { self.header.command_status }
     pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<bind_transmitter_resp, SmppError> {
+    pub fn decode(_header: CommandHeader, _pdu: &Vec<u8>) -> Result<bind_transmitter_resp, SmppError> {
         todo!()
     }
 

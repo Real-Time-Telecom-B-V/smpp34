@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, SocketAddr, Shutdown}, thread::{self}, time::Duration, sync::{atomic::{AtomicBool, Ordering}, Arc}, io::{self, BufRead, Write}};
+use std::{net::{IpAddr, SocketAddr}, sync::{atomic::{AtomicBool, Ordering}, Arc}};
 
 use futures::executor::block_on;
 use log::{info, error};
@@ -19,6 +19,7 @@ pub struct SmppServer {
     enquire_link_timer: u64,
     inactivity_timer: u64,
     response_timer: u64,
+    buffer_size: usize
 }
 #[derive(Debug, Clone)]
 pub struct SmppConnectionInformation {
@@ -37,11 +38,11 @@ pub struct SmppServerListener {
 impl SmppServer {
 
     pub fn new(address: IpAddr, port: u16, handler: Arc<SmppServerListener>) -> SmppServer {
-        SmppServer::new_with_default_timers(address, port, handler, 5000, 30000, 60000, 2000)
+        SmppServer::new_with_default_timers(address, port, handler, 5000, 30000, 60000, 2000, 1500)
     } 
 
-    pub fn new_with_default_timers(address: IpAddr, port: u16, handler: Arc<SmppServerListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64,) -> SmppServer {
-        SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer }
+    pub fn new_with_default_timers(address: IpAddr, port: u16, handler: Arc<SmppServerListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> SmppServer {
+        SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size }
     } 
 
     pub fn start(&mut self) {
@@ -53,33 +54,32 @@ impl SmppServer {
         info!("Starting smpp server on {}:{}", self.address, self.port);
         self.alive.store(true, Ordering::SeqCst);
 
-        let socket_address = SocketAddr::new(self.address, self.port); // Will be moved out
+        let server_socket_address = SocketAddr::new(self.address, self.port); // Will be moved out
         let alive = self.alive.clone();
         let handler = self.handler.clone();
         let session_init_timer = self.session_init_timer;
         let enquire_link_timer = self.enquire_link_timer;
+        let response_timer = self.response_timer;
         let inactivity_timer = self.inactivity_timer;
+        let buffer_size: usize = self.buffer_size;
 
         self.handle = Some(tokio::spawn(async move {
-            let listener = TcpListener::bind(socket_address).await.unwrap();
+            let listener = TcpListener::bind(server_socket_address).await.unwrap();
 
             while alive.load(Ordering::SeqCst) {
                 loop {
-                    let (mut stream, socket_address) = listener.accept().await.unwrap();
+                    let (mut stream, client_socket_address) = listener.accept().await.unwrap();
                     if alive.load(Ordering::SeqCst) {
                         let handler = handler.clone();
                         let session_init_timer_duration = tokio::time::Duration::from_millis(session_init_timer);
                         task::spawn_blocking (move || {
                             let session_state = OPEN { };
                             let connection_information = SmppConnectionInformation {
-                                server_address: socket_address,
-                                client_address: stream.peer_addr().unwrap(),
+                                server_address: server_socket_address,
+                                client_address: client_socket_address,
                             };
                             
                             info!("Got a connection from {} on server {}, waiting {}ms for bind", connection_information.client_address, connection_information.server_address, session_init_timer);
-
-                            // TODO inplement session_init_timer!!
-
                             let mut buffer = [0; 1024];
                             let first_read = block_on(timeout(session_init_timer_duration, stream.read(&mut buffer)));
 
@@ -102,7 +102,7 @@ impl SmppServer {
                                                         let session_state = block_on(session_state.bind_receiver(stream, bind_receiver, bind_receiver_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
-                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         } 
                                                     },
                                                     Err(error) => {
@@ -118,7 +118,7 @@ impl SmppServer {
                                                         let session_state = block_on(session_state.bind_transmitter(stream, bind_transmitter, &bind_transmitter_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
-                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                     } 
                                                     },
                                                     Err(error) => {
@@ -134,7 +134,7 @@ impl SmppServer {
                                                         let session_state = block_on(session_state.bind_transceiver(stream, bind_transceiver, &bind_transceiver_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
-                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         } 
                                                     },
                                                     Err(error) => {

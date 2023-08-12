@@ -1,10 +1,13 @@
-use std::{io::{BufReader, Write, Read, self}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering, AtomicU32}}, thread, time::Duration, cell::RefCell, fmt};
+use std::{sync::{Arc, Mutex, atomic::{AtomicBool, Ordering, AtomicU32}, mpsc::channel}, time::{Duration, Instant}, fmt};
+
+use bytes::BytesMut;
+
 
 use futures::executor::block_on;
-use log::{info, error};
+use log::{info, error, trace};
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{interval, timeout}};
 
-use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, outbind, enquire_link, enquire_link_resp};
+use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, enquire_link};
 
 use super::SmppConnectionInformation;
 
@@ -18,137 +21,206 @@ enum BOUND_TYPE {
 impl fmt::Display for BOUND_TYPE {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
-        // or, alternatively:
-        // fmt::Debug::fmt(self, f)
     }
 }
 
-async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, stream: TcpStream, connection_information: SmppConnectionInformation, enquire_link_timer: u64, inactivity_timer: u64) -> CLOSED {
-    info!("{} going into read_loop with enquire_link_timer {}ms and inactivity_timer {}ms", bound_type, enquire_link_timer, inactivity_timer);
+async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, stream: TcpStream, connection_information: SmppConnectionInformation, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
+    info!("[{} on server {}] {} going into read_loop with enquire_link_timer {}ms and inactivity_timer {}ms and read buffer size {} bytes", connection_information.client_address, connection_information.server_address, bound_type, enquire_link_timer, inactivity_timer, buffer_size);
     let sequence_number = Arc::new(AtomicU32::new(1));
     let alive = Arc::new(AtomicBool::new(false));
     alive.store(true, Ordering::SeqCst);
 
-    let mut buffer = [0; 1024];
-    let (mut reader, writer) = stream.into_split();        
+    let (mut reader, writer) = stream.into_split();    
     let writer = Arc::new(Mutex::new(writer));
 
-    let send_enquire_link = alive.clone();
-    let enquire_link_writer = writer.clone();
-    let enquire_link_sequence_number = sequence_number.clone();
-    let enquire_link_ticker = tokio::task::spawn(async move {
-        info!("enquire_link timer for {} on server {} started, sending every {}ms", connection_information.client_address, connection_information.server_address, enquire_link_timer);
-        let mut interval = interval(Duration::from_millis(enquire_link_timer));
-        interval.tick().await; // tick for the first time to warm the timer
-        interval.tick().await; // tick for the second time to start sending enquire_links only on next interval (as we just opened the connection it makes no sense to tick immediately)
-        while send_enquire_link.load(Ordering::SeqCst) {
-            let sequence_number = enquire_link_sequence_number.fetch_add(1, Ordering::SeqCst);
-            info!("enquire_link to {} on server {} with sequence_number {}", connection_information.client_address, connection_information.server_address, sequence_number);
-            block_on(enquire_link_writer.lock().unwrap().write(&enquire_link::new(sequence_number).encode())).expect("Unable to send enquire_link");
-            interval.tick().await;
+    let (tx, rx) = channel::<Vec<u8>>();
 
-            // TODO we need to implement response_timer!! Do we need to record outstanding operations?!
+    let writer_alive = alive.clone();
+    let writer_stream = writer.clone();
+    let writer_thread = tokio::task::spawn_blocking(move || {
+        info!("[{} on server {}] writer thread started", connection_information.client_address, connection_information.server_address);
+        while writer_alive.load(Ordering::SeqCst) {
+           for msg in &rx {
+            match block_on(writer_stream.lock().unwrap().write(&msg)) {
+                Ok(n) => trace!("Written {} bytes", n),
+                Err(e) => error!("Unable to write to TCP stream {}", e),
+            }
+           }
         }
-        info!("enquire_link timer for {} on server {} stopped", connection_information.client_address, connection_information.server_address);
+        info!("[{} on server {}] writer thread stopped", connection_information.client_address, connection_information.server_address);
     });
 
-    let inactivity_timer = tokio::time::Duration::from_millis(inactivity_timer);
+    let send_enquire_link = alive.clone();
+    let enquire_link_sequence_number = sequence_number.clone();
+    let enquire_link_writer = writer.clone();
+    let enquire_link_writer_tx = tx.clone();
+    let (enquire_link_tx, enquire_link_rx) = channel::<u32>();
+    let enquire_link_ticker = tokio::task::spawn_blocking(move || {
+        info!("[{} on server {}] enquire_link timer started, sending every {}ms", connection_information.client_address, connection_information.server_address, enquire_link_timer);
+        let mut enquire_link_timer = interval(Duration::from_millis(enquire_link_timer));
+        let response_timer = Duration::from_millis(response_timer);
+        block_on(enquire_link_timer.tick()); // tick for the first time to warm the timer
+        block_on(enquire_link_timer.tick()); // tick for the second time to start sending enquire_links only on next interval (as we just opened the connection it makes no sense to tick immediately)
+
+        while send_enquire_link.load(Ordering::SeqCst) {
+            let sequence_number = enquire_link_sequence_number.fetch_add(1, Ordering::SeqCst);
+            info!("[{} on server {}] enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, sequence_number);
+
+            enquire_link_writer_tx.send(enquire_link::new(sequence_number).encode()).expect("Can not send to writer thread");
+
+            match enquire_link_rx.recv_timeout(response_timer) {
+                Ok(sequence) => {
+                    // We want the sequence number to match, otherwise we must kill this bind
+                    if sequence != sequence_number { 
+                        error!("[{} on server {}] enquire_link_resp with sequence_number {} did not match sequence_number {}", connection_information.client_address, connection_information.server_address, sequence, sequence_number);
+                        block_on(enquire_link_writer.lock().unwrap().shutdown()).expect("Unable to close TCP stream");
+                        break;
+                    } 
+            },
+                Err(_e) => {
+                    error!("[{} on server {}] enquire_link with sequence_number {} no response within {}ms", connection_information.client_address, connection_information.server_address, sequence_number, response_timer.as_millis());
+                    block_on(enquire_link_writer.lock().unwrap().shutdown()).expect("Unable to close TCP stream");
+                    break;
+                }
+            }
+    
+            // Wait for next interval to send timer again
+            block_on(enquire_link_timer.tick());
+        }
+        info!("[{} on server {}] enquire_link timer stopped", connection_information.client_address, connection_information.server_address);
+    });
+
+    let read_timeout = tokio::time::Duration::from_millis(500); // Set a little time-out so we are able to detect if inactivity_timer or enquire_link timers expired
+    let mut buffer = BytesMut::with_capacity(buffer_size);
+    let mut last_read = Instant::now(); 
 
     loop {
-        let result = timeout(inactivity_timer, reader.read(&mut buffer)).await;
+        let result = timeout(read_timeout, reader.read_buf(&mut buffer)).await;
         match result {
-            Ok(Ok(n)) => {
-                let pdu = buffer[0..n].to_vec();
-                let pdu_length = pdu.len();
+            Ok(Ok(frame_length)) => {
+                let frame = buffer[0..frame_length].to_vec();
+                if frame_length >= 16 { // anything else we don't want
+                    let mut cursor = 0;
+                    let mut last_pdu_was_unbind = false;
+                    while cursor < frame_length && frame_length - cursor >= 16 { // Only read when we have bytes left in the frame AND at least 16 bytes left in the buffer (we choose to ignore and not decode)
+                        let pdu_length: u32 = u32::from_be_bytes(frame[cursor..cursor + 4].try_into().expect("Can not read PDU length"));
+                        let pdu = buffer[cursor as usize..cursor + pdu_length as usize].to_vec();
 
-                // Try read sequence_number in case we need a generic_nack.
-                // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
-                let potential_seq_no = if pdu_length >= 16 { u32::from_be_bytes(pdu[12..16].try_into().expect("Can not read sequence_number")) } else { 0 };
-                let command_header = CommandHeader::decode(&pdu);
+                        // Try read sequence_number in case we need a generic_nack.
+                        // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
+                        let potential_seq_no = if pdu_length >= 16 { u32::from_be_bytes(pdu[12..16].try_into().expect("Can not read sequence_number")) } else { 0 };
+                        let command_header = CommandHeader::decode(&pdu);
+                        let tx = tx.clone();
 
-                match command_header {
-                    Ok(header) => {
-                        if header.command_id == CommandId::submit_sm as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX)  {
-                            match submit_sm::decode(header, &pdu) {
-                                Ok(submit_sm) => {
-                                    let writer = writer.clone();
-                                    let handler = handler.clone();
-                                    let connection_information = connection_information.clone();
-                                    tokio::task::spawn_blocking( move || {
-                                        let submit_sm_resp = (handler.on_submit_sm)(submit_sm.clone(), &connection_information);
-                                        block_on(writer.lock().unwrap().write(&submit_sm_resp.encode())).expect("Can not write to stream");
-                                    });
-                                },
-                                Err(error) => {
-                                    error!("Connection from {} on server {}, unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
-                                    let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                    writer.lock().unwrap().write(&error).await.expect("Unable to write to stream");
-                                }
-                            }
-                        } else if header.command_id == CommandId::enquire_link as u32 {
-                            match enquire_link::decode(header, &pdu) {
-                                Ok(enquire_link) => {
-                                    info!("enquire_link from {} on server {} with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                    let enquire_link_resp = enquire_link.accept();
-                                    writer.lock().unwrap().write(&enquire_link_resp.encode()).await.expect("Unable to write to stream");
-                                },
-                                Err(error) => {
-                                    error!("Connection from {} on server {}, unable to decode enquire_link", connection_information.client_address, connection_information.server_address);
-                                    let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                    writer.lock().unwrap().write(&error).await.expect("Unable to write to stream");
-                                }
-                            }
-                        } else if header.command_id == CommandId::enquire_link_resp as u32 {
-                            // Just log! We do not need to handle this as there is a timer on the socket read this already triggers inactivity_timeout
-                            info!("enquire_link_resp from {} on server {}", connection_information.client_address, connection_information.server_address);
+                        match command_header {
+                            Ok(header) => {
+                                if header.command_id == CommandId::submit_sm as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX)  {
+                                    match submit_sm::decode(header, &pdu) {
+                                        Ok(submit_sm) => {
+                                            let handler = handler.clone();
+                                            let connection_information = connection_information.clone();
+                                            
+                                            tokio::task::spawn_blocking( move || {
+                                                let submit_sm_resp = (handler.on_submit_sm)(submit_sm.clone(), &connection_information);
+                                                tx.send(submit_sm_resp.encode()).expect("Can not send to writer thread");
+                                            });
+                                        },
+                                        Err(error) => {
+                                            error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
+                                            let error = submit_sm::generic_reject(potential_seq_no, error).encode();
+                                            tx.send(error).expect("Can not send to writer thread");
+                                        }
+                                    }
+                                } else if header.command_id == CommandId::enquire_link as u32 {
+                                    match enquire_link::decode(header, &pdu) {
+                                        Ok(enquire_link) => {
+                                            info!("[{} on server {}] enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                            let enquire_link_resp = enquire_link.accept();
+                                            tx.send(enquire_link_resp.encode()).expect("Can not send to writer thread");
+                                        },
+                                        Err(error) => {
+                                            error!("[{} on server {}] unable to decode enquire_link", connection_information.client_address, connection_information.server_address);
+                                            let error = submit_sm::generic_reject(potential_seq_no, error).encode();
+                                            tx.send(error).expect("Can not send to writer thread");
+                                        }
+                                    }
+                                } else if header.command_id == CommandId::enquire_link_resp as u32 {
+                                    info!("[{} on server {}] enquire_link_resp received for sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
 
-                            // TODO however we should verify if we got an answer??!?!
-                            
-                        } else if header.command_id == CommandId::unbind as u32 {
-                            match unbind::decode(header, &pdu) {
-                                Ok(unbind) => {
-                                    let unbind_resp = (handler.on_unbind)(unbind.clone(), &connection_information);
-                                    writer.lock().unwrap().write(&unbind_resp.encode()).await.expect("Unable to write to stream");
-                                },
-                                Err(error) => {
-                                    error!("Connection from {} on server {}, unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
-                                    let error = unbind::generic_reject(potential_seq_no, error).encode();
-                                    writer.lock().unwrap().write(&error).await.expect("Unable to write to stream");
+                                    // Send it to enquire_link thread for verification, it's waiting on it!
+                                    enquire_link_tx.send(header.sequence_number).expect("Unable to send sequence to enquire_link thread");
+                                    
+                                } else if header.command_id == CommandId::unbind as u32 {
+
+                                    // Whether or not the unbind fails, we don't care, if any ESMe sends us an unbind we stop the connection, so first we stop the enquire_link timer
+                                    enquire_link_ticker.abort(); 
+
+                                    match unbind::decode(header, &pdu) {
+                                        Ok(unbind) => {
+                                            let unbind_resp = (handler.on_unbind)(unbind.clone(), &connection_information);
+                                            tx.send(unbind_resp.encode()).expect("Can not send to writer thread");
+                                        },
+                                        Err(error) => {
+                                            error!("[{} on server {}] unable to decode unbind", connection_information.client_address, connection_information.server_address);
+                                            let error = unbind::generic_reject(potential_seq_no, error).encode();
+                                            tx.send(error).expect("Can not send to writer thread");
+                                        }
+                                    }
+
+                                    last_pdu_was_unbind = true;
+
+                                    break; 
+                                } else {
+                                    error!("[{} on server {}] Did not expect command_id {} for this bind, sending ESME_RINVBNDSTS in generick_nack", connection_information.client_address, connection_information.server_address, header.command_id);
+                                    let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVBNDSTS as u32, sequence_number: potential_seq_no };
+                                    tx.send(generic_nack.encode()).expect("Can not send to writer thread");
                                 }
-                            }
-                            break; 
-                        } else {
-                            error!("Did not expect command_id {} for this bind, sending ESME_RINVBNDSTS in generick_nack", header.command_id);
-                            let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVBNDSTS as u32, sequence_number: potential_seq_no };
-                            writer.lock().unwrap().write(&generic_nack.encode()).await.expect("Unable to write to stream");
+                            },
+                            Err(error) => {
+                                error!("[{} on server {}] Unable to decode command_header for PDU, sending {:?} in generic_nack", connection_information.client_address, connection_information.server_address, error); 
+                                let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
+                                tx.send(generic_nack.encode()).expect("Can not send to writer thread");
+
+                                enquire_link_ticker.abort(); // When the TCP stream is closed stop enquiring the link
+                            } 
                         }
-                    },
-                    Err(error) => {
-                        error!("Unable to decode command_header for PDU, sending {:?} in generic_nack", error); 
-                        let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
-                        writer.lock().unwrap().write(&generic_nack.encode()).await.expect("Unable to write to stream");
 
-                        enquire_link_ticker.abort(); // When the TCP stream is closed stop enquiring the link
-                    } 
+                        cursor = cursor + pdu_length as usize;
+                    }
+
+                    if last_pdu_was_unbind {
+                        break // Break the read loop so we can go to CLOSED state
+                    }
+
+                    last_read = Instant::now();
                 }
             },
-            Err(_e) => {
-                error!("inactivity_timer triggered, closing TCP connection");
-
-                enquire_link_ticker.abort(); // Stop enquiring the link as we are closing the connection
-                writer.lock().unwrap().shutdown().await.expect("Unable to close TCP connection");
-                break
-            },
+            Err(_e) => { /* Nothing to do here as we introduce the interval to not constantly block this thread */ },
             Ok(Err(e)) => {
-                error!("{} ", e);
-                enquire_link_ticker.abort(); // Stop enquiring the link as we are closing the connection
+                error!("[{} on server {}] {} ", connection_information.client_address, connection_information.server_address, e);
                 break
             },
         }
+
+        if enquire_link_ticker.is_finished() {
+            error!("[{} on server {}] enquire_link thread finished, stopping read loop", connection_information.client_address, connection_information.server_address);
+            break;
+        } else if last_read.elapsed().as_millis() > inactivity_timer.into() {
+            // Please note, it is more likely that the enquire_link timer stopped earlier as it expects a response likely within 2000ms (default) but in some weird scenario that it it's stuck we can always trigger the inactivity timer by keeping
+            // track of when the last packet was read
+            error!("[{} on server {}] inactivity_timer triggered after {}ms, closing TCP connection", connection_information.client_address, connection_information.server_address, inactivity_timer);
+            break;
+        }
+
+        buffer.clear(); // Make sure we start reading with an empty buffer
     }
 
-    info!("{} going to CLOSED state", bound_type);
+    info!("[{} on server {}] {} going to CLOSED state", connection_information.client_address, connection_information.server_address, bound_type);
     alive.store(false, Ordering::SeqCst);
+
+   
+    enquire_link_ticker.abort(); // Stop enquiring the link as we are closing the connection
+    writer_thread.abort(); // Stop allowing the sending of writing of new PDUs 
 
     CLOSED {  }
 }
@@ -236,8 +308,8 @@ pub (crate) struct BOUND_TX {
 }
 
 impl BOUND_TX {
-    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_TX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer).await
+    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
+        read_loop(BOUND_TYPE::BOUND_TX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size).await
     }
 }
 
@@ -249,8 +321,8 @@ pub (crate) struct BOUND_RX {
 }
 
 impl BOUND_RX {
-    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_RX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer).await
+    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
+        read_loop(BOUND_TYPE::BOUND_RX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size).await
     }
 }
 
@@ -263,8 +335,8 @@ pub (crate) struct BOUND_TRX {
 }
 
 impl BOUND_TRX {
-    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_TRX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer).await
+    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
+        read_loop(BOUND_TYPE::BOUND_TRX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size).await
     }
 }
 
