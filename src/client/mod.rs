@@ -6,7 +6,7 @@ use log::info;
 use tokio::{task::{JoinHandle, self}, net::TcpStream, io::AsyncWriteExt};
 use uuid::Uuid;
 
-use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId};
+use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BIND_TYPE {
@@ -25,6 +25,12 @@ pub struct SmppClient {
     server_address: IpAddr,
     server_port: u16,
     bind_type: BIND_TYPE,
+    system_id: String,
+    password: String,
+    system_type: String,
+    addr_ton: u8,
+    addr_npi: u8,
+    address_range: String,
     handle: Option<JoinHandle<()>>,
     alive: Arc<AtomicBool>,
     handler: Arc<SmppClientListener>,
@@ -87,12 +93,12 @@ pub struct SmppClientListener {
 
 impl SmppClient {
 
-    pub fn new(server_address: IpAddr, server_port: u16, bind_type: BIND_TYPE, handler: Arc<SmppClientListener>) -> SmppClient {
-        SmppClient::new_with_default_timers(server_address, server_port, bind_type, handler, 5000, 30000, 60000, 2000, 1500)
+    pub fn new(server_address: IpAddr, server_port: u16, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<SmppClientListener>) -> SmppClient {
+        SmppClient::new_with_default_timers(server_address, server_port, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handler, 5000, 30000, 60000, 2000, 1500)
     } 
 
-    pub fn new_with_default_timers(server_address: IpAddr, server_port: u16, bind_type: BIND_TYPE, handler: Arc<SmppClientListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> SmppClient {
-        SmppClient { server_address, server_port, bind_type, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size }
+    pub fn new_with_default_timers(server_address: IpAddr, server_port: u16, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<SmppClientListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> SmppClient {
+        SmppClient { server_address, server_port, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size }
     } 
 
     pub fn start(&mut self) {
@@ -113,32 +119,32 @@ impl SmppClient {
         let inactivity_timer = self.inactivity_timer;
         let buffer_size: usize = self.buffer_size;
         let bind_type = self.bind_type.clone();
+        let system_id = self.system_id.clone();
+        let password = self.password.clone();
+        let system_type = self.system_type.clone();
+        let addr_ton = self.addr_ton.clone();
+        let addr_npi = self.addr_npi.clone();
+        let address_range = self.address_range.clone();
 
         self.handle = Some(task::spawn_blocking(move || {
 
             let mut stream = block_on(TcpStream::connect(server_socket_address)).expect("Can not connect");
 
-            match bind_type {
+            let bind_pdu: Vec<u8> = match bind_type {
                 BIND_TYPE::RX => {
-                    let bind_receiver = bind_receiver { 
-                        header: crate::CommandHeader { 
-                            command_length: 16, 
-                            command_id: CommandId::bind_receiver as u32, 
-                            command_status: SmppError::ESME_ROK as u32, 
-                            sequence_number: 0 
-                        }, 
-                        system_id: todo!(), 
-                        password: todo!(), 
-                        system_type: todo!(), 
-                        interface_version: todo!(), 
-                        addr_ton: todo!(), 
-                        addr_npi: todo!(), 
-                        address_range: todo!() 
-                    };
+                    bind_receiver::new(0, system_id, password, system_type, 0x34, addr_ton, addr_npi, address_range).encode()
                 },
-                BIND_TYPE::TX => todo!(),
-                BIND_TYPE::TRX => todo!(),
+                BIND_TYPE::TX => {
+                    bind_transmitter::new(0, system_id, password, system_type, 0x34, addr_ton, addr_npi, address_range).encode()
+                },
+                BIND_TYPE::TRX => {
+                    bind_transceiver::new(0, system_id, password, system_type, 0x34, addr_ton, addr_npi, address_range).encode()
+                },
             };
+
+            stream.write(&bind_pdu);
+
+            // TODO read bind response and handle accordingly
 
 
             while alive.load(Ordering::SeqCst) {

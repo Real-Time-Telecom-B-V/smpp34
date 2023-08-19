@@ -16,6 +16,30 @@ pub struct bind_transceiver {
 }
 
 impl bind_transceiver {
+    pub(crate) fn new(sequence_number: u32, system_id: String, password: String, system_type: String, interface_version: u8, addr_ton: u8, addr_npi: u8, address_range: String) -> bind_transceiver {
+
+        assert!(system_id.len() < 16, "system_id can be a maximum of 16 octets including NULL terminator for C-Octet-String");
+        assert!(password.len() < 9, "password can be a maximum of 9 octets including NULL terminator for C-Octet-String");
+        assert!(system_type.len() < 13, "system_type can be a maximum of 13 octets including NULL terminator for C-Octet-String");
+        assert!(address_range.len() < 41, "address_range can be a maximum of 41 octets including NULL terminator for C-Octet-String");
+
+        bind_transceiver { 
+            header: CommandHeader { 
+                command_length: (16 + system_id.len() + 1 + password.len() + 1 + system_type.len() + 1 + 3 + address_range.len() + 1) as u32 ,
+                command_id: CommandId::alert_notification as u32, 
+                command_status: SmppError::ESME_ROK as u32, 
+                sequence_number
+            },
+            system_id, 
+            password, 
+            system_type, 
+            interface_version, 
+            addr_ton, 
+            addr_npi, 
+            address_range 
+        }
+    }
+
     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<bind_transceiver, SmppError> {
         let result = decode_bind_request(header, pdu)?;
         Ok(bind_transceiver { header: result.header, system_id: result.system_id, password: result.password, system_type: result.system_type, interface_version: result.interface_version, addr_ton: result.addr_ton, addr_npi: result.addr_npi, address_range: result.address_range })
