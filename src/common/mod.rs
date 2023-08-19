@@ -10,6 +10,9 @@ pub use commands::outbind::*;
 pub use commands::unbind::*;
 pub use commands::submit_sm::*;
 
+pub use commands::data_sm::*;
+pub use commands::deliver_sm::*;
+
 pub use commands::enquire_link::*;
 
 pub use commands::generic_nack::*;
@@ -248,14 +251,6 @@ fn parse_octet_string(bytes: Vec<u8>, supposed_length: usize, maximum_length: us
     }
 }
 
-/*fn parse_optional_u8(bytes: Vec<u8>, tag) -> Result<Option<u16>, SmppError> {
-    Err(SmppError::ESME_RINVOPTPARAMVAL)
-}
-
-fn parse_optional_u16(bytes: Vec<u8>) -> Result<u16, SmppError> {
-    Err(SmppError::ESME_RINVOPTPARAMVAL)
-}*/
-
 fn decode_bind_request(header: CommandHeader, pdu: &Vec<u8>) -> Result<CommonBindRequestParameters, SmppError> {
     // CommondHeader decode method makes sure that PDU length matches the command_length so no need to check this again
     
@@ -298,23 +293,6 @@ pub struct submit_sm_multi_resp {
     
 }
 
-
-pub struct data_sm {
-
-}
-
-pub struct data_sm_resp {
-    
-}
-
-pub struct deliver_sm {
-
-}
-
-pub struct deliver_sm_resp {
-    
-}
-
 pub struct query_sm {
 
 }
@@ -340,6 +318,40 @@ pub struct replace_sm_resp {
 }
 
 pub struct alert_notification {
-
+    header: CommandHeader,
+    source_addr_ton: u8, 
+    source_addr_npi: u8, 
+    source_addr: String, 
+    esme_addr_ton: u8, 
+    esme_addr_npi: u8, 
+    esme_addr: String,
+    ms_availability_status: Option<u8>,
 }
 
+impl alert_notification {
+    pub(crate) fn new(sequence_number: u32, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, esme_addr_ton: u8, esme_addr_npi: u8, esme_addr: String, ms_availability_status: Option<u8>) -> alert_notification {
+
+        assert!(source_addr.len() <= 65, "source_addr can be a maximum of 65 characters");
+        assert!(esme_addr.len() <= 65, "esme_addr can be a maximum of 65 characters");
+
+        alert_notification { 
+            header: CommandHeader { 
+                command_length: (16 + 2 + source_addr.len() + 1 + 2 + esme_addr.len() + 1 + if ms_availability_status.is_some() {5 } else { 0 }) as u32 ,
+                command_id: CommandId::alert_notification as u32, 
+                command_status: SmppError::ESME_ROK as u32, 
+                sequence_number
+            },
+            source_addr_ton, 
+            source_addr_npi, 
+            source_addr, 
+            esme_addr_ton, 
+            esme_addr_npi, 
+            esme_addr, 
+            ms_availability_status 
+        }
+    }
+
+    pub fn encode(self) -> Vec<u8> {
+        todo!()
+    }
+}

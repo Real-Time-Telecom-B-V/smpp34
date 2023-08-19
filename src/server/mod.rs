@@ -1,10 +1,11 @@
-use std::{net::{IpAddr, SocketAddr}, sync::{atomic::{AtomicBool, Ordering}, Arc}};
+use std::{net::{IpAddr, SocketAddr}, sync::{atomic::{AtomicBool, Ordering, AtomicU32}, Arc, mpsc::Sender, Mutex}};
 
 use futures::executor::block_on;
 use log::{info, error};
 use tokio::{task::{JoinHandle, self}, net::TcpListener, io::{AsyncReadExt, AsyncWriteExt}, time::timeout};
+use uuid::Uuid;
 
-use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack};
+use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack, deliver_sm, alert_notification, data_sm};
 
 
 mod state;
@@ -27,12 +28,61 @@ pub struct SmppConnectionInformation {
     pub client_address: SocketAddr,
 }
 
+pub struct ESME {
+    can_receive: bool,
+    tx_channel: Sender<Vec<u8>>,
+    sequence_number: Arc<AtomicU32>,
+}
+
+impl ESME {
+
+    fn next_sequence_number(&self) -> u32 {
+        self.sequence_number.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub fn send_deliver_sm(&self, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: String) {
+        if self.can_receive {
+            let deliver_sm = deliver_sm::new(self.next_sequence_number(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, protocol_id, priority_flag, schedule_delivery_time, validity_period, registered_delivery, replace_if_present_flag, data_coding, sm_default_msg_id, short_message);
+            self.tx_channel.send(deliver_sm.encode()).expect("Unable to send deliver_sm request to writer thread");
+        } else {
+            panic!("Can not send deliver_sm on non RX/TRX bind");
+        }
+    }
+
+    pub fn send_unbind(&self) {
+        let unbind = unbind::with_sequence_number(self.sequence_number.fetch_add(1, Ordering::SeqCst));
+        self.tx_channel.send(unbind.encode()).expect("Unable to send unbind request to writer thread");
+    }
+
+    pub fn send_data_sm(&self, service_type: String, source_addr_ton: u8,  source_addr_npi: u8, source_addr: String,  dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) {
+        let data_sm = data_sm::new(self.next_sequence_number(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, registered_delivery, data_coding);
+        self.tx_channel.send(data_sm.encode()).expect("Unable to send data_sm request to writer thread");
+    }
+
+    pub fn send_alert_notification(&self, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, esme_addr_ton: u8, esme_addr_npi: u8, esme_addr: String, ms_availability_status: Option<u8>) {
+        if self.can_receive {
+            let alert_notification = alert_notification::new(self.next_sequence_number(), source_addr_ton, source_addr_npi, source_addr, esme_addr_ton, esme_addr_npi, esme_addr, ms_availability_status);
+            self.tx_channel.send(alert_notification.encode()).expect("Unable to send alert_notification request to writer thread");
+        } else {
+            panic!("Can not send alert_notification on non RX/TRX bind");
+        }
+    }
+}
+
 pub struct SmppServerListener {
-    pub on_bind_transmitter: fn(bind_transmitter, &SmppConnectionInformation) -> bind_transmitter_resp,
-    pub on_bind_receiver: fn(bind_receiver, &SmppConnectionInformation) -> bind_receiver_resp,
-    pub on_bind_transceiver: fn(bind_transceiver, &SmppConnectionInformation) -> bind_transceiver_resp,
-    pub on_unbind: fn(unbind, &SmppConnectionInformation) -> unbind_resp,
-    pub on_submit_sm: fn(submit_sm, &SmppConnectionInformation) ->  submit_sm_resp,
+    pub on_bind_transmitter: fn(bind_transmitter, &SmppConnectionInformation, session_id: &String) -> bind_transmitter_resp,
+    pub on_bind_receiver: fn(bind_receiver, &SmppConnectionInformation, session_id: &String) -> bind_receiver_resp,
+    pub on_bind_transceiver: fn(bind_transceiver, &SmppConnectionInformation, session_id: &String) -> bind_transceiver_resp,
+    pub on_unbind: fn(unbind, &SmppConnectionInformation, session_id: &String) -> unbind_resp,
+    pub on_submit_sm: fn(submit_sm, &SmppConnectionInformation, session_id: &String) ->  submit_sm_resp,
+    
+    /// Notification sent when an ESME is in bound state and is ready for receiving commands. 
+    /// The ESME wraps the MPSC channel towards the writer thread of the bind
+    pub on_esme_bound: fn(esme: ESME, session_id: &String),
+
+    /// Notification sent when the ESME has become unavailable due to a bind being closed or transport error
+    /// It is up to the user of this listener to drop the ESME received on the on_esme_bound notificiation, any attempt to write to the ESME after will result in a panic as the MSPC channel is closed
+    pub on_esme_unbound: fn(session_id: &String)
 }
 
 impl SmppServer {
@@ -73,14 +123,15 @@ impl SmppServer {
                         let handler = handler.clone();
                         let session_init_timer_duration = tokio::time::Duration::from_millis(session_init_timer);
                         task::spawn_blocking (move || {
-                            let session_state = OPEN { };
+                            let session_id = Uuid::new_v4().to_string();
+                            let session_state = OPEN { session_id };
                             let connection_information = SmppConnectionInformation {
                                 server_address: server_socket_address,
                                 client_address: client_socket_address,
                             };
                             
                             info!("Got a connection from {} on server {}, waiting {}ms for bind", connection_information.client_address, connection_information.server_address, session_init_timer);
-                            let mut buffer = [0; 1024];
+                            let mut buffer = [0; 1024]; // Not using BytesMut here as we always first get a bind before expecting big traffic so chose a low buffer size
                             let first_read = block_on(timeout(session_init_timer_duration, stream.read(&mut buffer)));
 
                             match first_read {
@@ -98,11 +149,12 @@ impl SmppServer {
                                             if header.command_id == CommandId::bind_receiver as u32 {
                                                 match bind_receiver::decode(header, &pdu) {
                                                     Ok(bind_receiver) => {
-                                                        let bind_receiver_resp = (handler.on_bind_receiver)(bind_receiver.clone(), &connection_information);
+                                                        let bind_receiver_resp = (handler.on_bind_receiver)(bind_receiver.clone(), &connection_information, &session_state.session_id);
                                                         let session_state = block_on(session_state.bind_receiver(stream, bind_receiver, bind_receiver_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
-                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            let state = session_state.unwrap();
+                                                            block_on(state.read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         } 
                                                     },
                                                     Err(error) => {
@@ -114,11 +166,12 @@ impl SmppServer {
                                             } else if header.command_id == CommandId::bind_transmitter as u32 {
                                                 match bind_transmitter::decode(header, &pdu) {
                                                     Ok(bind_transmitter) => {
-                                                        let bind_transmitter_resp = (handler.on_bind_transmitter)(bind_transmitter.clone(), &connection_information);
+                                                        let bind_transmitter_resp = (handler.on_bind_transmitter)(bind_transmitter.clone(), &connection_information, &session_state.session_id);
                                                         let session_state = block_on(session_state.bind_transmitter(stream, bind_transmitter, &bind_transmitter_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
-                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            let state = session_state.unwrap();
+                                                            block_on(state.read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                     } 
                                                     },
                                                     Err(error) => {
@@ -130,11 +183,12 @@ impl SmppServer {
                                             } else if header.command_id == CommandId::bind_transceiver as u32 {
                                                 match bind_transceiver::decode(header, &pdu) {
                                                     Ok(bind_transceiver) => {
-                                                        let bind_transceiver_resp = (handler.on_bind_transceiver)(bind_transceiver.clone(), &connection_information);
+                                                        let bind_transceiver_resp = (handler.on_bind_transceiver)(bind_transceiver.clone(), &connection_information, &session_state.session_id);
                                                         let session_state = block_on(session_state.bind_transceiver(stream, bind_transceiver, &bind_transceiver_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
-                                                            block_on(session_state.unwrap().read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            let state = session_state.unwrap();
+                                                            block_on(state.read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         } 
                                                     },
                                                     Err(error) => {

@@ -7,12 +7,12 @@ use futures::executor::block_on;
 use log::{info, error, trace};
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{interval, timeout}};
 
-use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, enquire_link};
+use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, enquire_link, server::ESME};
 
 use super::SmppConnectionInformation;
 
 #[derive(Debug, Clone, PartialEq)]
-enum BOUND_TYPE {
+pub enum BOUND_TYPE {
     BOUND_RX,
     BOUND_TX,
     BOUND_TRX
@@ -24,7 +24,7 @@ impl fmt::Display for BOUND_TYPE {
     }
 }
 
-async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, stream: TcpStream, connection_information: SmppConnectionInformation, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
+async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, stream: TcpStream, connection_information: SmppConnectionInformation, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, session_id: String) -> CLOSED {
     info!("[{} on server {}] {} going into read_loop with enquire_link_timer {}ms and inactivity_timer {}ms and read buffer size {} bytes", connection_information.client_address, connection_information.server_address, bound_type, enquire_link_timer, inactivity_timer, buffer_size);
     let sequence_number = Arc::new(AtomicU32::new(1));
     let alive = Arc::new(AtomicBool::new(false));
@@ -94,6 +94,12 @@ async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, str
     let mut buffer = BytesMut::with_capacity(buffer_size);
     let mut last_read = Instant::now(); 
 
+    (listener.on_esme_bound)(ESME {
+        can_receive: bound_type == BOUND_TYPE::BOUND_RX || bound_type == BOUND_TYPE::BOUND_TRX, 
+        tx_channel: tx.clone(), 
+        sequence_number }, &session_id 
+    );
+
     loop {
         let result = timeout(read_timeout, reader.read_buf(&mut buffer)).await;
         match result {
@@ -117,11 +123,11 @@ async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, str
                                 if header.command_id == CommandId::submit_sm as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX)  {
                                     match submit_sm::decode(header, &pdu) {
                                         Ok(submit_sm) => {
-                                            let handler = handler.clone();
+                                            let handler = listener.clone();
                                             let connection_information = connection_information.clone();
-                                            
+                                            let submit_sm_session_id = session_id.clone();
                                             tokio::task::spawn_blocking( move || {
-                                                let submit_sm_resp = (handler.on_submit_sm)(submit_sm.clone(), &connection_information);
+                                                let submit_sm_resp = (handler.on_submit_sm)(submit_sm.clone(), &connection_information, &submit_sm_session_id);
                                                 tx.send(submit_sm_resp.encode()).expect("Can not send to writer thread");
                                             });
                                         },
@@ -157,7 +163,7 @@ async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, str
 
                                     match unbind::decode(header, &pdu) {
                                         Ok(unbind) => {
-                                            let unbind_resp = (handler.on_unbind)(unbind.clone(), &connection_information);
+                                            let unbind_resp = (listener.on_unbind)(unbind.clone(), &connection_information, &session_id);
                                             tx.send(unbind_resp.encode()).expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
@@ -215,6 +221,8 @@ async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, str
         buffer.clear(); // Make sure we start reading with an empty buffer
     }
 
+    (listener.on_esme_unbound)(&session_id);
+
     info!("[{} on server {}] {} going to CLOSED state", connection_information.client_address, connection_information.server_address, bound_type);
     alive.store(false, Ordering::SeqCst);
 
@@ -222,7 +230,7 @@ async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, str
     enquire_link_ticker.abort(); // Stop enquiring the link as we are closing the connection
     writer_thread.abort(); // Stop allowing the sending of writing of new PDUs 
 
-    CLOSED {  }
+    CLOSED { }
 }
 
 ///
@@ -231,6 +239,7 @@ async fn read_loop(bound_type: BOUND_TYPE, handler: Arc<SmppServerListener>, str
 /// Bind request.
 ///
 pub (crate) struct OPEN {
+    pub (crate) session_id: String,
 }
 
 impl OPEN {
@@ -239,6 +248,7 @@ impl OPEN {
             let result = stream.write(&bind_transmitter_resp.clone().encode()).await;
             if result.is_ok() {
                 let new_state = BOUND_TX {
+                    session_id: self.session_id,
                     stream,
                     system_id: bind_transmitter.system_id,
                     handler: handler.clone(),
@@ -260,6 +270,7 @@ impl OPEN {
             let result = stream.write(&bind_receiver_resp.encode()).await;
             if result.is_ok() {
                 let new_state = BOUND_RX {
+                    session_id: self.session_id,
                     stream,
                     system_id: bind_receiver.system_id,
                     handler: handler.clone(),
@@ -281,6 +292,7 @@ impl OPEN {
             let result = stream.write(&bind_transceiver_resp.clone().encode()).await;
             if result.is_ok() {
                 let new_state = BOUND_TRX {
+                    session_id: self.session_id,
                     stream,
                     system_id: bind_transceiver.system_id,
                     handler: handler.clone(),
@@ -301,6 +313,7 @@ impl OPEN {
 }
 
 pub (crate) struct BOUND_TX {
+    pub (crate) session_id: String,
     stream: TcpStream,
     system_id: String,
     handler: Arc<SmppServerListener>,
@@ -309,11 +322,12 @@ pub (crate) struct BOUND_TX {
 
 impl BOUND_TX {
     pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_TX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size).await
+        read_loop(BOUND_TYPE::BOUND_TX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
     }
 }
 
 pub (crate) struct BOUND_RX {
+    pub (crate) session_id: String,
     stream: TcpStream,
     system_id: String,
     handler: Arc<SmppServerListener>,
@@ -322,12 +336,13 @@ pub (crate) struct BOUND_RX {
 
 impl BOUND_RX {
     pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_RX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size).await
+        read_loop(BOUND_TYPE::BOUND_RX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
     }
 }
 
 
 pub (crate) struct BOUND_TRX {
+    pub (crate) session_id: String,
     stream: TcpStream,
     system_id: String,
     handler: Arc<SmppServerListener>,
@@ -336,10 +351,10 @@ pub (crate) struct BOUND_TRX {
 
 impl BOUND_TRX {
     pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_TRX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size).await
+        read_loop(BOUND_TYPE::BOUND_TRX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
     }
 }
 
 pub (crate) struct CLOSED {
-    
 }
+

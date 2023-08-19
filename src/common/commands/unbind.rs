@@ -17,13 +17,24 @@ pub struct unbind {
 
 impl unbind {
 
+    pub(crate) fn with_sequence_number(sequence_number: u32) -> unbind {
+        unbind {
+            header: CommandHeader {
+                command_length: 16,
+                command_id: CommandId::unbind as u32,
+                command_status: SmppError::ESME_ROK as u32,
+                sequence_number
+            },
+        }
+    }
+
     /// Decode a unbind PDU
     /// 
     /// # Arguments
     /// 
     /// * `header` - already decoded Command Header which is only used for validation as unbind should not have a body
     /// * `pdu` - the complete PDU used for extra validation
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<unbind, SmppError> {
+    pub(crate) fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<unbind, SmppError> {
         if header.command_id == CommandId::unbind as u32 {
             if pdu.len() == 16 {
                 Ok(unbind {
@@ -119,7 +130,14 @@ mod all_unbind_tests {
     
     
         #[test]
-        fn encode_unbind() {
+        fn encode_unbind1() {
+            let unbind = unbind::with_sequence_number(0x12344567);
+            let pdu = unbind.encode();
+            assert_eq!(pdu, vec![0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x45, 0x67]);
+        }
+
+        #[test]
+        fn encode_unbind2() {
             let unbind = unbind { header: CommandHeader { command_length: 16, command_id: CommandId::unbind as u32, command_status: SmppError::ESME_ROK as u32, sequence_number: 0x12344567 } };
             let pdu = unbind.encode();
             assert_eq!(pdu, vec![0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x45, 0x67]);
