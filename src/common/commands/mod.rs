@@ -4,10 +4,12 @@ pub mod bind_transceiver;
 pub mod outbind;
 pub mod unbind;
 pub mod submit_sm;
-
+pub mod submit_sm_multi;
 pub mod data_sm;
 pub mod deliver_sm;
-
+pub mod query_sm;
+pub mod cancel_sm;
+pub mod replace_sm;
 pub mod enquire_link;
-
+pub mod alert_notification;
 pub mod generic_nack;

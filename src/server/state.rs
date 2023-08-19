@@ -9,7 +9,7 @@ use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{interval, 
 
 use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, enquire_link, server::ESME};
 
-use super::SmppConnectionInformation;
+use crate::SmppConnectionInformation;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BOUND_TYPE {

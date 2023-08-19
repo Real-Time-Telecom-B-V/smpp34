@@ -1,5 +1,7 @@
 mod commands;
 
+use std::net::SocketAddr;
+
 use log::error;
 
 // Re-exports
@@ -9,12 +11,14 @@ pub use commands::bind_transceiver::*;
 pub use commands::outbind::*;
 pub use commands::unbind::*;
 pub use commands::submit_sm::*;
-
+pub use commands::submit_sm_multi::*;
 pub use commands::data_sm::*;
 pub use commands::deliver_sm::*;
-
+pub use commands::query_sm::*;
+pub use commands::cancel_sm::*;
+pub use commands::replace_sm::*;
 pub use commands::enquire_link::*;
-
+pub use commands::alert_notification::*;
 pub use commands::generic_nack::*;
 
 
@@ -283,75 +287,8 @@ fn decode_bind_request(header: CommandHeader, pdu: &Vec<u8>) -> Result<CommonBin
 }
 
 
-
-
-pub struct submit_sm_multi {
-
-}
-
-pub struct submit_sm_multi_resp {
-    
-}
-
-pub struct query_sm {
-
-}
-
-pub struct query_sm_resp {
-    
-}
-
-pub struct cancel_sm {
-
-}
-
-pub struct cancel_sm_resp {
-    
-}
-
-pub struct replace_sm {
-
-}
-
-pub struct replace_sm_resp {
-    
-}
-
-pub struct alert_notification {
-    header: CommandHeader,
-    source_addr_ton: u8, 
-    source_addr_npi: u8, 
-    source_addr: String, 
-    esme_addr_ton: u8, 
-    esme_addr_npi: u8, 
-    esme_addr: String,
-    ms_availability_status: Option<u8>,
-}
-
-impl alert_notification {
-    pub(crate) fn new(sequence_number: u32, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, esme_addr_ton: u8, esme_addr_npi: u8, esme_addr: String, ms_availability_status: Option<u8>) -> alert_notification {
-
-        assert!(source_addr.len() <= 65, "source_addr can be a maximum of 65 characters");
-        assert!(esme_addr.len() <= 65, "esme_addr can be a maximum of 65 characters");
-
-        alert_notification { 
-            header: CommandHeader { 
-                command_length: (16 + 2 + source_addr.len() + 1 + 2 + esme_addr.len() + 1 + if ms_availability_status.is_some() {5 } else { 0 }) as u32 ,
-                command_id: CommandId::alert_notification as u32, 
-                command_status: SmppError::ESME_ROK as u32, 
-                sequence_number
-            },
-            source_addr_ton, 
-            source_addr_npi, 
-            source_addr, 
-            esme_addr_ton, 
-            esme_addr_npi, 
-            esme_addr, 
-            ms_availability_status 
-        }
-    }
-
-    pub fn encode(self) -> Vec<u8> {
-        todo!()
-    }
+#[derive(Debug, Clone)]
+pub struct SmppConnectionInformation {
+    pub server_address: SocketAddr,
+    pub client_address: SocketAddr,
 }

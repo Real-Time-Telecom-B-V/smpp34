@@ -33,6 +33,40 @@ pub struct submit_sm  {
 }
 
 impl submit_sm {
+
+    // TODO optional parameters
+    pub (crate) fn new(sequence_number: u32, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: String) -> submit_sm {
+        
+        assert!(short_message.len() <= 254, "Message can only be a maximum of 254 characters");
+
+        submit_sm { 
+            header: CommandHeader { 
+                command_length: (16 + service_type.len() + 1 + 2 + source_addr.len() + 1 + 2 + destination_addr.len() + 1 + 10 + short_message.len()) as u32,  
+                command_id: CommandId::submit_sm as u32, 
+                command_status: SmppError::ESME_ROK as u32, 
+                sequence_number }, 
+            service_type, 
+            source_addr_ton, 
+            source_addr_npi, 
+            source_addr, 
+            dest_addr_ton, 
+            dest_addr_npi, 
+            destination_addr, 
+            esm_class, 
+            protocol_id, 
+            priority_flag, 
+            schedule_delivery_time, 
+            validity_period, 
+            registered_delivery, 
+            replace_if_present_flag, 
+            data_coding, 
+            sm_default_msg_id, 
+            sm_length: short_message.len() as u8, 
+            short_message, 
+            user_message_reference: None 
+        }
+    }
+
     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<submit_sm, SmppError> {
         warn!("Decode not fully implemented yet, optional parameters not available");
     

@@ -4,7 +4,7 @@ use crate::{CommandHeader, SmppError, common::{decode_bind_request, encode_bind_
 
 #[derive(Debug, Clone)]
 pub struct bind_receiver {
-    header: CommandHeader,
+    pub (crate) header: CommandHeader,
     pub system_id: String,
     pub password: String,
     pub system_type: String,

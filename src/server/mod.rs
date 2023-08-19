@@ -5,7 +5,7 @@ use log::{info, error};
 use tokio::{task::{JoinHandle, self}, net::TcpListener, io::{AsyncReadExt, AsyncWriteExt}, time::timeout};
 use uuid::Uuid;
 
-use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack, deliver_sm, alert_notification, data_sm};
+use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack, deliver_sm, alert_notification, data_sm, SmppConnectionInformation};
 
 
 mod state;
@@ -22,11 +22,7 @@ pub struct SmppServer {
     response_timer: u64,
     buffer_size: usize
 }
-#[derive(Debug, Clone)]
-pub struct SmppConnectionInformation {
-    pub server_address: SocketAddr,
-    pub client_address: SocketAddr,
-}
+
 
 pub struct ESME {
     can_receive: bool,

@@ -1,7 +1,7 @@
 use log::warn;
 use num_traits::FromPrimitive;
 
-use crate::{CommandHeader, common::{parse_c_octet_string, parse_next_int, parse_octet_string}, SmppError, CommandId};
+use crate::{CommandHeader, common::{parse_c_octet_string, parse_next_int}, SmppError, CommandId};
 
 #[derive(Debug, Clone)]
 pub struct data_sm  {
