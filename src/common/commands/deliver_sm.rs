@@ -129,13 +129,9 @@ impl deliver_sm {
         todo!()
     }
 
-    pub fn accept(self, message_id: String) -> deliver_sm_resp {
-        if message_id.len() > 65 {
-            panic!("message_id has a maximum length of 65 characters")
-        }
-
+    pub fn accept(self) -> deliver_sm_resp {
         deliver_sm_resp { header: CommandHeader {
-            command_length: 16 + message_id.len() as u32 + 1, // message_id is a C-Octet-String
+            command_length: 16 + 1, // message_id is a C-Octet-String (and is always NULL in deliver_sm_resp)
             command_id: CommandId::deliver_sm_resp as u32,
             command_status: SmppError::ESME_ROK as u32,
             sequence_number: self.header.sequence_number,

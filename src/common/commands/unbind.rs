@@ -17,6 +17,11 @@ pub struct unbind {
 
 impl unbind {
 
+    /// Create a new unbind request with given sequence_number
+    /// 
+    /// # Arguments
+    /// 
+    /// * `sequence_number` - The sequence_number to set in the PDU command header
     pub(crate) fn with_sequence_number(sequence_number: u32) -> unbind {
         unbind {
             header: CommandHeader {
@@ -127,7 +132,6 @@ mod all_unbind_tests {
     #[cfg(test)]
     mod unbind_tests {
         use crate::{CommandHeader, SmppError, unbind, CommandId};
-    
     
         #[test]
         fn encode_unbind1() {

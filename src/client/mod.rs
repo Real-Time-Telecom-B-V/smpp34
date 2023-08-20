@@ -6,7 +6,7 @@ use log::info;
 use tokio::{task::{JoinHandle, self}, net::TcpStream, io::AsyncWriteExt};
 use uuid::Uuid;
 
-use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver};
+use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver, deliver_sm, data_sm_resp, deliver_sm_resp, alert_notification};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BIND_TYPE {
@@ -38,7 +38,8 @@ pub struct SmppClient {
     enquire_link_timer: u64,
     inactivity_timer: u64,
     response_timer: u64,
-    buffer_size: usize
+    buffer_size: usize,
+    window_size: usize,
 }
 
 pub struct SMSC {
@@ -53,23 +54,29 @@ impl SMSC {
         self.sequence_number.fetch_add(1, Ordering::SeqCst)
     }
 
-    pub fn send_submit_sm(&self, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: String) {
+    pub fn send_submit_sm(&self, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: String) -> u32 {
         if self.can_send {
-            let submit_sm = submit_sm::new(self.next_sequence_number(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, protocol_id, priority_flag, schedule_delivery_time, validity_period, registered_delivery, replace_if_present_flag, data_coding, sm_default_msg_id, short_message);
+            let sequence_number = self.next_sequence_number();
+            let submit_sm = submit_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, protocol_id, priority_flag, schedule_delivery_time, validity_period, registered_delivery, replace_if_present_flag, data_coding, sm_default_msg_id, short_message);
             self.tx_channel.send(submit_sm.encode()).expect("Unable to send deliver_sm request to writer thread");
+            sequence_number
         } else {
             panic!("Can not send deliver_sm on non RX/TRX bind");
         }
     }
     
-    pub fn send_unbind(&self) {
-        let unbind = unbind::with_sequence_number(self.sequence_number.fetch_add(1, Ordering::SeqCst));
+    pub fn send_unbind(&self) -> u32 {
+        let sequence_number = self.next_sequence_number();
+        let unbind = unbind::with_sequence_number(sequence_number.clone());
         self.tx_channel.send(unbind.encode()).expect("Unable to send unbind request to writer thread");
+        sequence_number
     }
 
-    pub fn send_data_sm(&self, service_type: String, source_addr_ton: u8,  source_addr_npi: u8, source_addr: String,  dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) {
-        let data_sm = data_sm::new(self.next_sequence_number(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, registered_delivery, data_coding);
+    pub fn send_data_sm(&self, service_type: String, source_addr_ton: u8,  source_addr_npi: u8, source_addr: String,  dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) -> u32 {
+        let sequence_number = self.next_sequence_number();
+        let data_sm = data_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, registered_delivery, data_coding);
         self.tx_channel.send(data_sm.encode()).expect("Unable to send data_sm request to writer thread");
+        sequence_number
     }
     
 }
@@ -77,7 +84,15 @@ impl SMSC {
 pub struct SmppClientListener {
 
     pub on_unbind: fn(unbind, &SmppConnectionInformation, session_id: &String) -> unbind_resp,
+    
     pub on_submit_sm_resp: fn(submit_sm_resp, &SmppConnectionInformation, session_id: &String),
+    pub on_data_sm_resp: fn(data_sm_resp, &SmppConnectionInformation, session_id: &String),
+
+    pub on_deliver_sm: fn(deliver_sm, &SmppConnectionInformation, session_id: &String) -> deliver_sm_resp,
+    pub on_alert_notification: fn(alert_notification, &SmppConnectionInformation, session_id: &String),
+
+    /// Notification sent when an SMPP command timed-out (respone_timer triggered)
+    pub on_timeout: fn(sequence_number: u32, session_id: &String),
     
     /// Notification sent when an SMSC is in bound state and is ready for receiving commands. 
     /// The SMSC wraps the MPSC channel towards the writer thread of the bind
@@ -93,12 +108,12 @@ pub struct SmppClientListener {
 
 impl SmppClient {
 
-    pub fn new(server_address: IpAddr, server_port: u16, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<SmppClientListener>) -> SmppClient {
-        SmppClient::new_with_default_timers(server_address, server_port, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handler, 5000, 30000, 60000, 2000, 1500)
+    pub fn new(server_address: IpAddr, server_port: u16, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<SmppClientListener>, window_size: usize) -> SmppClient {
+        SmppClient::new_with_default_timers(server_address, server_port, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handler, 5000, 30000, 60000, 2000, 1500, window_size)
     } 
 
-    pub fn new_with_default_timers(server_address: IpAddr, server_port: u16, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<SmppClientListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> SmppClient {
-        SmppClient { server_address, server_port, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size }
+    pub fn new_with_default_timers(server_address: IpAddr, server_port: u16, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<SmppClientListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, window_size: usize) -> SmppClient {
+        SmppClient { server_address, server_port, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size, window_size }
     } 
 
     pub fn start(&mut self) {
@@ -128,6 +143,7 @@ impl SmppClient {
 
         self.handle = Some(task::spawn_blocking(move || {
 
+            // TODO set connection timeout!
             let mut stream = block_on(TcpStream::connect(server_socket_address)).expect("Can not connect");
 
             let bind_pdu: Vec<u8> = match bind_type {
@@ -142,7 +158,7 @@ impl SmppClient {
                 },
             };
 
-            stream.write(&bind_pdu);
+            block_on(stream.write(&bind_pdu)).expect("Unable to write to TCP stream");
 
             // TODO read bind response and handle accordingly
 

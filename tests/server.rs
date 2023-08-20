@@ -1,5 +1,5 @@
 use log::{error, info};
-use smpp34::{server::ESME, bind_transmitter, bind_transmitter_resp, bind_receiver, bind_receiver_resp, SmppError, bind_transceiver, bind_transceiver_resp, unbind, unbind_resp, submit_sm_resp, submit_sm, SmppConnectionInformation};
+use smpp34::{server::ESME, bind_transmitter, bind_transmitter_resp, bind_receiver, bind_receiver_resp, SmppError, bind_transceiver, bind_transceiver_resp, unbind, unbind_resp, submit_sm_resp, submit_sm, SmppConnectionInformation, deliver_sm_resp};
 
 
 
@@ -43,6 +43,13 @@ pub fn on_submit_sm(request: submit_sm, connection_information: &SmppConnectionI
     request.accept(String::from("1234"))
 }
 
+pub fn on_deliver_sm_resp(response: deliver_sm_resp, connection_information: &SmppConnectionInformation, session_id: &String)  {
+    info!("[deliver_sm_resp@{}] <{}> {:?}", connection_information.server_address, connection_information.client_address, response);
+}
+
+pub fn on_timeout(sequence_number: u32, session_id: &String) {
+}
+
 pub fn on_esme_bound(esme: ESME, session_id: &String) {
 
 }
@@ -66,6 +73,8 @@ mod tests {
             on_bind_transceiver, 
             on_unbind,
             on_submit_sm,
+            on_deliver_sm_resp,
+            on_timeout,
             on_esme_bound,
             on_esme_unbound,
         };
