@@ -178,4 +178,8 @@ impl deliver_sm_resp {
 
         buffer
      }
+
+     pub fn decode(_header: CommandHeader, _pdu: &Vec<u8>) -> Result<deliver_sm_resp, SmppError> {
+        todo!()
+     }
 }

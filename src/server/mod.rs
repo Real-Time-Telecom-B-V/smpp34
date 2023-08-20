@@ -5,7 +5,9 @@ use log::{info, error};
 use tokio::{task::{JoinHandle, self}, net::TcpListener, io::{AsyncReadExt, AsyncWriteExt}, time::timeout};
 use uuid::Uuid;
 
-use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack, deliver_sm, alert_notification, data_sm, SmppConnectionInformation, deliver_sm_resp};
+use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack, deliver_sm, alert_notification, data_sm, SmppConnectionInformation, deliver_sm_resp, data_sm_resp};
+
+use self::state::WriteFrame;
 
 
 mod state;
@@ -26,7 +28,7 @@ pub struct SmppServer {
 
 pub struct ESME {
     can_receive: bool,
-    tx_channel: Sender<Vec<u8>>,
+    tx_channel: Sender<WriteFrame>,
     sequence_number: Arc<AtomicU32>,
 }
 
@@ -43,7 +45,7 @@ impl ESME {
         if self.can_receive {
             let sequence_number = self.next_sequence_number();
             let deliver_sm = deliver_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, protocol_id, priority_flag, schedule_delivery_time, validity_period, registered_delivery, replace_if_present_flag, data_coding, sm_default_msg_id, short_message);
-            self.tx_channel.send(deliver_sm.encode()).expect("Unable to send deliver_sm request to writer thread");
+            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: deliver_sm.encode() }).expect("Unable to send deliver_sm request to writer thread");
             sequence_number
         } else {
             panic!("Can not send deliver_sm on non RX/TRX bind");
@@ -53,14 +55,14 @@ impl ESME {
     pub fn send_unbind(&self) -> u32 {
         let sequence_number = self.next_sequence_number();
         let unbind = unbind::with_sequence_number(sequence_number.clone());
-        self.tx_channel.send(unbind.encode()).expect("Unable to send unbind request to writer thread");
+        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode() }).expect("Unable to send unbind request to writer thread");
         sequence_number
     }
 
     pub fn send_data_sm(&self, service_type: String, source_addr_ton: u8,  source_addr_npi: u8, source_addr: String,  dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) -> u32 {
         let sequence_number = self.next_sequence_number();
         let data_sm = data_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, registered_delivery, data_coding);
-        self.tx_channel.send(data_sm.encode()).expect("Unable to send data_sm request to writer thread");
+        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode() }).expect("Unable to send data_sm request to writer thread");
         sequence_number
     }
 
@@ -68,7 +70,7 @@ impl ESME {
         if self.can_receive {
             let sequence_number = self.next_sequence_number();
             let alert_notification = alert_notification::new(sequence_number.clone(), source_addr_ton, source_addr_npi, source_addr, esme_addr_ton, esme_addr_npi, esme_addr, ms_availability_status);
-            self.tx_channel.send(alert_notification.encode()).expect("Unable to send alert_notification request to writer thread");
+            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: alert_notification.encode() }).expect("Unable to send alert_notification request to writer thread");
             sequence_number
         } else {
             panic!("Can not send alert_notification on non RX/TRX bind");
@@ -84,6 +86,8 @@ pub struct SmppServerListener {
     pub on_submit_sm: fn(submit_sm, &SmppConnectionInformation, session_id: &String) ->  submit_sm_resp,
 
     pub on_deliver_sm_resp: fn(deliver_sm_resp, &SmppConnectionInformation, session_id: &String),
+    pub on_data_sm_resp: fn(data_sm_resp, &SmppConnectionInformation, session_id: &String),
+
     
     /// Notification sent when an SMPP command timed-out (respone_timer triggered)
     pub on_timeout: fn(sequence_number: u32, session_id: &String),
