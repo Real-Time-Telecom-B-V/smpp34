@@ -31,14 +31,15 @@ pub fn on_smsc_unbound(session_id: &String) {
 }
 
 mod tests {
-    use std::{net::Ipv4Addr, sync::Arc};
-
+    use std::{net::Ipv4Addr, sync::Arc, thread, time::Duration};
     use smpp34::client::{SmppClientListener, SmppClient, BIND_TYPE};
 
     use crate::*;
 
-    #[test]
-    fn test_multi_pdu_frame() {
+    use test_log::test;
+
+    #[test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+    async fn test_server_bind() {
         let listener = SmppClientListener {
             on_unbind,
             on_submit_sm_resp,
@@ -64,5 +65,10 @@ mod tests {
             20
         );
         client.start();
+
+        thread::sleep(Duration::from_millis(10000));
+
+        client.stop();
+
     }
 }

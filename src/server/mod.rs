@@ -242,6 +242,10 @@ impl SmppServer {
     }
 
     pub fn stop(&mut self) {
+
+        // TODO send unbind!!
+
+        
         info!("Stopping smpp server");
         self.alive.store(false, Ordering::SeqCst);
         self.handle

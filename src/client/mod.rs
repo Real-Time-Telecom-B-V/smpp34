@@ -1,12 +1,13 @@
-use core::fmt;
-use std::{sync::{atomic::{AtomicU32, Ordering, AtomicBool}, mpsc::Sender, Arc}, net::{IpAddr, SocketAddr}};
+use core::{fmt};
+use std::{sync::{atomic::{AtomicU32, Ordering, AtomicBool}, mpsc::Sender, Arc}, net::{IpAddr, SocketAddr}, time::{Duration, Instant}, thread};
 
-use futures::executor::block_on;
-use log::info;
-use tokio::{task::{JoinHandle, self}, net::TcpStream, io::AsyncWriteExt};
+use bytes::BytesMut;
+use futures::{executor::block_on, channel::mpsc::unbounded};
+use log::{info, error};
+use tokio::{task::{JoinHandle, self}, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::timeout};
 use uuid::Uuid;
 
-use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver, deliver_sm, data_sm_resp, deliver_sm_resp, alert_notification};
+use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver, deliver_sm, data_sm_resp, deliver_sm_resp, alert_notification, CommandHeader};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BIND_TYPE {
@@ -127,7 +128,7 @@ impl SmppClient {
 
         let server_socket_address = SocketAddr::new(self.server_address, self.server_port); // Will be moved out
         let alive = self.alive.clone();
-        let handler = self.handler.clone();
+        let listener = self.handler.clone();
         let session_init_timer = self.session_init_timer;
         let enquire_link_timer = self.enquire_link_timer;
         let response_timer = self.response_timer;
@@ -141,37 +142,82 @@ impl SmppClient {
         let addr_npi = self.addr_npi.clone();
         let address_range = self.address_range.clone();
 
-        self.handle = Some(task::spawn_blocking(move || {
-
+        self.handle = Some(tokio::spawn(async move {
+            let mut stream = TcpStream::connect(server_socket_address).await.expect("Can not connect"); // TODO connection timeout
             // TODO set connection timeout!
-            let mut stream = block_on(TcpStream::connect(server_socket_address)).expect("Can not connect");
+            info!("smpp client connected to server {}:{} sending bind PDU", server_socket_address.ip(), server_socket_address.port());
 
             let bind_pdu: Vec<u8> = match bind_type {
                 BIND_TYPE::RX => {
-                    bind_receiver::new(0, system_id, password, system_type, 0x34, addr_ton, addr_npi, address_range).encode()
+                    bind_receiver::new(1, system_id, password, system_type, addr_ton, addr_npi, address_range).encode()
                 },
                 BIND_TYPE::TX => {
-                    bind_transmitter::new(0, system_id, password, system_type, 0x34, addr_ton, addr_npi, address_range).encode()
+                    bind_transmitter::new(1, system_id, password, system_type, addr_ton, addr_npi, address_range).encode()
                 },
                 BIND_TYPE::TRX => {
-                    bind_transceiver::new(0, system_id, password, system_type, 0x34, addr_ton, addr_npi, address_range).encode()
+                    bind_transceiver::new(1, system_id, password, system_type, addr_ton, addr_npi, address_range).encode()
                 },
             };
 
-            block_on(stream.write(&bind_pdu)).expect("Unable to write to TCP stream");
+            // Send bind request
+            stream.write(&bind_pdu).await.expect("Unable to write to TCP stream");
 
-            // TODO read bind response and handle accordingly
 
+            info!("Bind PDU sent, waiting for response");
+            let session_init_timer_duration = tokio::time::Duration::from_millis(session_init_timer);
+            let mut buffer = [0; 1024]; // Not using BytesMut here as we always first get a bind before expecting big traffic so chose a low buffer size
+            let first_read = timeout(session_init_timer_duration, stream.read(&mut buffer)).await;
 
-            while alive.load(Ordering::SeqCst) {
-                let session_id = Uuid::new_v4().to_string();
-                break;
+            match first_read {
+                Ok(Ok(n)) => {
+                    let pdu = buffer[0..n].to_vec();
+                    let pdu_length = pdu.len();
+
+                    // Try read sequence_number in case we need a generic_nack.
+                    // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
+                    let potential_seq_no = if pdu_length >= 16 { u32::from_be_bytes(pdu[12..16].try_into().expect("Can not read sequence_number")) } else { 0 };
+                    let command_header = CommandHeader::decode(&pdu);
+
+                    match command_header {
+                        Ok(header) => {
+                            if potential_seq_no == 1 && header.command_status == SmppError::ESME_ROK as u32
+                                && ((bind_type == BIND_TYPE::RX && header.command_id == CommandId::bind_receiver_resp as u32) 
+                                || (bind_type == BIND_TYPE::TX && header.command_id == CommandId::bind_transmitter_resp as u32) 
+                                || (bind_type == BIND_TYPE::TRX && header.command_id ==CommandId::bind_transceiver_resp as u32) 
+                            ) {
+                                let session_id = Uuid::new_v4().to_string();
+                                info!("Successfuly bound in {} mode", bind_type);
+
+                                let read_timeout = tokio::time::Duration::from_millis(500); // Set a little time-out so we are able to detect if inactivity_timer or enquire_link timers expired
+                                let mut buffer = BytesMut::with_capacity(buffer_size);
+                                let mut last_read = Instant::now(); 
+                                let sequence_number = Arc::new(AtomicU32::new(2));
+
+                                /*(listener.on_smsc_bound)(SMSC {
+                                    can_send: bind_type == BIND_TYPE::TX || bind_type == BIND_TYPE::TRX, 
+                                    tx_channel: tx.clone(), 
+                                    sequence_number }, &session_id 
+                                );*/
+
+                                // Main read loop
+                                while alive.load(Ordering::SeqCst) {
+                                    
+                                }
+                            } else {
+                                error!("No valid bind response received command_id {} command_status {} sequence_number {}", header.command_id, header.command_status, header.sequence_number);
+                            }
+                        },
+                        Err(_) => error!("Unable to decode bind response"),
+                    }
+                },
+                _ => error!("No bind response from server in {}ms", session_init_timer),
             }
         }));
-
     }
 
     pub fn stop(&mut self) {
+
+        // TODO send unbind!!
         info!("Stopping smpp client");
         self.alive.store(false, Ordering::SeqCst);
         self.handle

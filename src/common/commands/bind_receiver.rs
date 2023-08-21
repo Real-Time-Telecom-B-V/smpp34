@@ -1,6 +1,6 @@
 use num_traits::FromPrimitive;
 
-use crate::{CommandHeader, SmppError, common::{decode_bind_request, encode_bind_response}, CommandId};
+use crate::{CommandHeader, SmppError, common::{decode_bind_request, encode_bind_response, encode_bind_request}, CommandId};
 
 #[derive(Debug, Clone)]
 pub struct bind_receiver {
@@ -18,7 +18,7 @@ pub struct bind_receiver {
 
 impl bind_receiver {
 
-    pub(crate) fn new(sequence_number: u32, system_id: String, password: String, system_type: String, interface_version: u8, addr_ton: u8, addr_npi: u8, address_range: String) -> bind_receiver {
+    pub(crate) fn new(sequence_number: u32, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String) -> bind_receiver {
 
         assert!(system_id.len() < 16, "system_id can be a maximum of 16 octets including NULL terminator for C-Octet-String");
         assert!(password.len() < 9, "password can be a maximum of 9 octets including NULL terminator for C-Octet-String");
@@ -28,14 +28,14 @@ impl bind_receiver {
         bind_receiver { 
             header: CommandHeader { 
                 command_length: (16 + system_id.len() + 1 + password.len() + 1 + system_type.len() + 1 + 3 + address_range.len() + 1) as u32 ,
-                command_id: CommandId::alert_notification as u32, 
+                command_id: CommandId::bind_receiver as u32, 
                 command_status: SmppError::ESME_ROK as u32, 
                 sequence_number
             },
             system_id, 
             password, 
             system_type, 
-            interface_version, 
+            interface_version: 0x34, 
             addr_ton, 
             addr_npi, 
             address_range 
@@ -48,7 +48,7 @@ impl bind_receiver {
     }
 
     pub fn encode(self) -> Vec<u8> {
-        todo!()
+        encode_bind_request(self.header, self.system_id, self.password, self.system_type, self.interface_version, self.addr_ton, self.addr_npi, self.address_range)
     }
 
     pub fn accept(self, system_id: String, sc_interface_version: Option<u8>) -> bind_receiver_resp {

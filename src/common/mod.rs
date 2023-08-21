@@ -2,6 +2,7 @@ mod commands;
 
 use std::net::SocketAddr;
 
+use bytes::buf;
 use log::error;
 
 // Re-exports
@@ -185,6 +186,23 @@ pub enum SmppError {
 
     ESME_RDELIVERYFAILURE = 0x000000FE, // Delivery Failure (used for data_sm_resp)
     ESME_RUNKNOWNERR = 0x000000FF, // Unknown Error
+}
+
+fn encode_bind_request(header: CommandHeader, system_id: String, password: String, system_type: String, interface_version: u8, addr_ton: u8, addr_npi: u8, address_range: String) -> Vec<u8> {
+    let mut buffer: Vec<u8> = Vec::with_capacity(header.command_status as usize);
+    buffer.append(&mut header.encode());
+    buffer.append(&mut system_id.into_bytes());
+    buffer.push(0x00); // system_id is a C-Octet-String so terminate with 0x00
+    buffer.append(&mut password.into_bytes());
+    buffer.push(0x00); // password is a C-Octet-String so terminate with 0x00
+    buffer.append(&mut system_type.into_bytes());
+    buffer.push(0x00); // system_type is a C-Octet-String so terminate with 0x00
+    buffer.push(interface_version);
+    buffer.push(addr_ton);
+    buffer.push(addr_npi);
+    buffer.append(&mut address_range.into_bytes());
+    buffer.push(0x00); // address_range is a C-Octet-String so terminate with 0x00
+    buffer
 }
 
 fn encode_bind_response(header: CommandHeader, system_id: Option<String>, sc_interface_version: Option<u8>) -> Vec<u8> {

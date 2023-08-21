@@ -284,7 +284,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                         let sequence_number_to_remove = sequence_number.clone();
                         let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
                         if lapsed > response_timer.into() {
-                            pending_requests.remove(&sequence_number_to_remove);
+                           // pending_requests.remove(&sequence_number_to_remove);
                             error!("[{} on server {}] Response for sequence_number {} did not come in after {}ms lapsed", connection_information.client_address, connection_information.server_address, sequence_number, lapsed);
                             
                             (listener.on_timeout)(sequence_number.clone(), &session_id); // TODO Should we spawn a task?
