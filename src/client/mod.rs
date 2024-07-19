@@ -1,13 +1,13 @@
 use core::{fmt};
-use std::{sync::{atomic::{AtomicU32, Ordering, AtomicBool}, mpsc::Sender, Arc}, net::{IpAddr, SocketAddr}, time::{Duration, Instant}, thread};
+use std::{sync::{atomic::{AtomicU32, Ordering, AtomicBool}, mpsc::{Sender, channel}, Arc, Mutex}, net::{IpAddr, SocketAddr}, time::{Duration, Instant, SystemTime}, thread, collections::HashMap};
 
 use bytes::BytesMut;
 use futures::{executor::block_on, channel::mpsc::unbounded};
 use log::{info, error};
-use tokio::{task::{JoinHandle, self}, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::timeout};
+use tokio::{task::{JoinHandle, self}, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{timeout, interval}};
 use uuid::Uuid;
 
-use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver, deliver_sm, data_sm_resp, deliver_sm_resp, alert_notification, CommandHeader};
+use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver, deliver_sm, data_sm_resp, deliver_sm_resp, alert_notification, CommandHeader, WriteFrame, enquire_link};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BIND_TYPE {
@@ -147,6 +147,11 @@ impl SmppClient {
             // TODO set connection timeout!
             info!("smpp client connected to server {}:{} sending bind PDU", server_socket_address.ip(), server_socket_address.port());
 
+            let connection_information = SmppConnectionInformation {
+                server_address: server_socket_address,
+                client_address: stream.local_addr().expect("No local address").clone(),
+            };
+
             let bind_pdu: Vec<u8> = match bind_type {
                 BIND_TYPE::RX => {
                     bind_receiver::new(1, system_id, password, system_type, addr_ton, addr_npi, address_range).encode()
@@ -188,10 +193,76 @@ impl SmppClient {
                                 let session_id = Uuid::new_v4().to_string();
                                 info!("Successfuly bound in {} mode", bind_type);
 
+                                let (mut reader, writer) = stream.into_split();    
+                                let writer = Arc::new(Mutex::new(writer));
+
+                                let (tx, rx) = channel::<WriteFrame>();
+                                let mut pending_requests: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
+
                                 let read_timeout = tokio::time::Duration::from_millis(500); // Set a little time-out so we are able to detect if inactivity_timer or enquire_link timers expired
                                 let mut buffer = BytesMut::with_capacity(buffer_size);
                                 let mut last_read = Instant::now(); 
                                 let sequence_number = Arc::new(AtomicU32::new(2));
+
+                                let writer_alive = alive.clone();
+                                let writer_stream = writer.clone();
+                                let writer_pending_requests = pending_requests.clone();
+                                let writer_thread = tokio::task::spawn_blocking(move || {
+                                    info!("[{} on server {}] writer thread started", connection_information.client_address, connection_information.server_address);
+                                    while writer_alive.load(Ordering::SeqCst) {
+                                    for frame in &rx {
+                                        match block_on(writer_stream.lock().unwrap().write(&frame.pdu)) {
+                                            Ok(n) => { 
+                                                if frame.our_sequence_number.is_some() {
+                                                    writer_pending_requests.lock().unwrap().insert(frame.our_sequence_number.unwrap(), SystemTime::now()); 
+                                                }
+                                            },
+                                            Err(e) => { error!("Unable to write to TCP stream {}", e) },
+                                        }
+                                    }
+                                    }
+                                    info!("[{} on server {}] writer thread stopped", connection_information.client_address, connection_information.server_address);
+                                });
+
+                                let send_enquire_link = alive.clone();
+                                let enquire_link_sequence_number = sequence_number.clone();
+                                let enquire_link_writer = writer.clone();
+                                let enquire_link_writer_tx = tx.clone();
+                                let (enquire_link_tx, enquire_link_rx) = channel::<u32>();
+                                let enquire_link_ticker = tokio::task::spawn_blocking(move || {
+                                    info!("[{} on server {}] enquire_link timer started, sending every {}ms", connection_information.client_address, connection_information.server_address, enquire_link_timer);
+                                    let mut enquire_link_timer = interval(Duration::from_millis(enquire_link_timer));
+                                    let response_timer = Duration::from_millis(response_timer);
+                                    block_on(enquire_link_timer.tick()); // tick for the first time to warm the timer
+                                    block_on(enquire_link_timer.tick()); // tick for the second time to start sending enquire_links only on next interval (as we just opened the connection it makes no sense to tick immediately)
+
+                                    while send_enquire_link.load(Ordering::SeqCst) {
+                                        let sequence_number = enquire_link_sequence_number.fetch_add(1, Ordering::SeqCst);
+                                        info!("[{} on server {}] enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, sequence_number);
+
+                                        enquire_link_writer_tx.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: enquire_link::new(sequence_number).encode() }).expect("Can not send to writer thread");
+
+                                        match enquire_link_rx.recv_timeout(response_timer) {
+                                            Ok(sequence) => {
+                                                // We want the sequence number to match, otherwise we must kill this bind
+                                                if sequence != sequence_number { 
+                                                    error!("[{} on server {}] enquire_link_resp with sequence_number {} did not match sequence_number {}", connection_information.client_address, connection_information.server_address, sequence, sequence_number);
+                                                    block_on(enquire_link_writer.lock().unwrap().shutdown()).expect("Unable to close TCP stream");
+                                                    break;
+                                                } 
+                                        },
+                                            Err(_e) => {
+                                                error!("[{} on server {}] enquire_link with sequence_number {} no response within {}ms", connection_information.client_address, connection_information.server_address, sequence_number, response_timer.as_millis());
+                                                block_on(enquire_link_writer.lock().unwrap().shutdown()).expect("Unable to close TCP stream");
+                                                break;
+                                            }
+                                        }
+                                
+                                        // Wait for next interval to send timer again
+                                        block_on(enquire_link_timer.tick());
+                                    }
+                                    info!("[{} on server {}] enquire_link timer stopped", connection_information.client_address, connection_information.server_address);
+                                });
 
                                 /*(listener.on_smsc_bound)(SMSC {
                                     can_send: bind_type == BIND_TYPE::TX || bind_type == BIND_TYPE::TRX, 
@@ -203,6 +274,15 @@ impl SmppClient {
                                 while alive.load(Ordering::SeqCst) {
                                     
                                 }
+
+                                //(listener.on_esme_unbound)(&session_id);
+
+                                info!("[{} on server {}] {} going to CLOSED state", connection_information.client_address, connection_information.server_address, bind_type);
+                                alive.store(false, Ordering::SeqCst);
+
+                            
+                                //enquire_link_ticker.abort(); // Stop enquiring the link as we are closing the connection
+                                writer_thread.abort(); // Stop allowing the sending of writing of new PDUs 
                             } else {
                                 error!("No valid bind response received command_id {} command_status {} sequence_number {}", header.command_id, header.command_status, header.sequence_number);
                             }

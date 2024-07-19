@@ -1,9 +1,9 @@
 use log::warn;
 use num_traits::FromPrimitive;
-
+use serde::{Deserialize, Serialize};
 use crate::{CommandHeader, common::{parse_c_octet_string, parse_next_int, parse_octet_string}, SmppError, CommandId};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct submit_sm  {
     header: CommandHeader,
     /// The service_type parameter can be used to indicate the SMS Application service associated with the message.

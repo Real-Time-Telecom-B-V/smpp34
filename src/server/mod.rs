@@ -1,14 +1,11 @@
 use std::{net::{IpAddr, SocketAddr}, sync::{atomic::{AtomicBool, Ordering, AtomicU32}, Arc, mpsc::Sender, Mutex}};
-
+use std::collections::HashSet;
 use futures::executor::block_on;
 use log::{info, error};
 use tokio::{task::{JoinHandle, self}, net::TcpListener, io::{AsyncReadExt, AsyncWriteExt}, time::timeout};
 use uuid::Uuid;
 
-use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack, deliver_sm, alert_notification, data_sm, SmppConnectionInformation, deliver_sm_resp, data_sm_resp};
-
-use self::state::WriteFrame;
-
+use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack, deliver_sm, alert_notification, data_sm, SmppConnectionInformation, deliver_sm_resp, data_sm_resp, WriteFrame};
 
 mod state;
 
@@ -23,6 +20,7 @@ pub struct SmppServer {
     inactivity_timer: u64,
     response_timer: u64,
     buffer_size: usize,
+    esmes: HashSet<ESME>
 }
 
 
@@ -108,7 +106,7 @@ impl SmppServer {
     } 
 
     pub fn new_with_default_timers(address: IpAddr, port: u16, handler: Arc<SmppServerListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> SmppServer {
-        SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size }
+        SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size, esmes: HashSet::new() }
     } 
 
     pub fn start(&mut self) {
@@ -147,7 +145,7 @@ impl SmppServer {
                             };
                             
                             info!("Got a connection from {} on server {}, waiting {}ms for bind", connection_information.client_address, connection_information.server_address, session_init_timer);
-                            let mut buffer = [0; 1024]; // Not using BytesMut here as we always first get a bind before expecting big traffic so chose a low buffer size
+                            let mut buffer = [0; 1024]; // Not using BytesMut here as we always first get a bind before expecting big traffic so choose a low buffer size
                             let first_read = block_on(timeout(session_init_timer_duration, stream.read(&mut buffer)));
 
                             match first_read {
