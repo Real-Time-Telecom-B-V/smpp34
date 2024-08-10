@@ -4,7 +4,7 @@ use bytes::BytesMut;
 
 
 use futures::executor::block_on;
-use log::{info, error, trace};
+use log::{info, error};
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{interval, timeout}};
 
 use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, enquire_link, server::ESME, deliver_sm_resp, data_sm_resp};
