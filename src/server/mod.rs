@@ -27,7 +27,10 @@ pub struct SmppServer {
 
 
 pub struct ESME {
-    can_receive: bool,
+    pub client_address: SocketAddr,
+    pub session_id: String,
+    pub system_id: String,
+    pub can_receive: bool,
     tx_channel: Sender<WriteFrame>,
     sequence_number: Arc<AtomicU32>,
 }
@@ -165,12 +168,13 @@ impl SmppServer {
                                             if header.command_id == CommandId::bind_receiver as u32 {
                                                 match bind_receiver::decode(header, &pdu) {
                                                     Ok(bind_receiver) => {
+                                                        let system_id = bind_receiver.system_id.clone();
                                                         let bind_receiver_resp = (handler.on_bind_receiver)(bind_receiver.clone(), &connection_information, &session_state.session_id);
                                                         let session_state = block_on(session_state.bind_receiver(stream, bind_receiver, bind_receiver_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
                                                             let state = session_state.unwrap();
-                                                            block_on(state.read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            block_on(state.read_loop(system_id, enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         } 
                                                     },
                                                     Err(error) => {
@@ -182,12 +186,13 @@ impl SmppServer {
                                             } else if header.command_id == CommandId::bind_transmitter as u32 {
                                                 match bind_transmitter::decode(header, &pdu) {
                                                     Ok(bind_transmitter) => {
+                                                        let system_id = bind_transmitter.system_id.clone();
                                                         let bind_transmitter_resp = (handler.on_bind_transmitter)(bind_transmitter.clone(), &connection_information, &session_state.session_id);
                                                         let session_state = block_on(session_state.bind_transmitter(stream, bind_transmitter, &bind_transmitter_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
                                                             let state = session_state.unwrap();
-                                                            block_on(state.read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            block_on(state.read_loop(system_id, enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                     } 
                                                     },
                                                     Err(error) => {
@@ -199,12 +204,13 @@ impl SmppServer {
                                             } else if header.command_id == CommandId::bind_transceiver as u32 {
                                                 match bind_transceiver::decode(header, &pdu) {
                                                     Ok(bind_transceiver) => {
+                                                        let system_id = bind_transceiver.system_id.clone();
                                                         let bind_transceiver_resp = (handler.on_bind_transceiver)(bind_transceiver.clone(), &connection_information, &session_state.session_id);
                                                         let session_state = block_on(session_state.bind_transceiver(stream, bind_transceiver, &bind_transceiver_resp, &connection_information, handler));
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
                                                         if session_state.is_ok() {
                                                             let state = session_state.unwrap();
-                                                            block_on(state.read_loop(enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
+                                                            block_on(state.read_loop(system_id, enquire_link_timer, inactivity_timer, response_timer, buffer_size)); // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         } 
                                                     },
                                                     Err(error) => {

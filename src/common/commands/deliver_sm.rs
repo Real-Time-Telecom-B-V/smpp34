@@ -1,3 +1,5 @@
+use std::option;
+
 use log::warn;
 use num_traits::FromPrimitive;
 
@@ -126,7 +128,34 @@ impl deliver_sm {
     }
 
     pub fn encode(self) -> Vec<u8> {
-        todo!()
+        let mut buffer: Vec<u8> = Vec::with_capacity(self.header.command_status as usize);
+        buffer.append(&mut self.header.encode());
+        buffer.append(&mut self.service_type.into_bytes());
+        buffer.push(0x00); // service_type is a C-Octet-String so terminate with 0x00
+        buffer.push(self.source_addr_ton);
+        buffer.push(self.source_addr_npi);
+        buffer.append(&mut self.source_addr.into_bytes());
+        buffer.push(0x00); // source_addr is a C-Octet-String so terminate with 0x00
+        buffer.push(self.dest_addr_ton);
+        buffer.push(self.dest_addr_npi);
+        buffer.append(&mut self.destination_addr.into_bytes());
+        buffer.push(0x00); // destination_addr is a C-Octet-String so terminate with 0x00
+        buffer.push(self.esm_class);
+        buffer.push(self.protocol_id);
+        buffer.push(self.priority_flag);
+        buffer.append(&mut self.schedule_delivery_time.into_bytes());
+        buffer.push(0x00); // schedule_delivery_time is a C-Octet-String so terminate with 0x00
+        buffer.append(&mut self.validity_period.into_bytes());
+        buffer.push(0x00); // validity_period is a C-Octet-String so terminate with 0x00
+        buffer.push(self.registered_delivery);
+        buffer.push(self.replace_if_present_flag);
+        buffer.push(self.data_coding);
+        buffer.push(self.sm_default_msg_id);
+        buffer.push(self.sm_length);
+        buffer.append(&mut self.short_message.into_bytes());
+
+        // TODO optional parameters
+        buffer
     }
 
     pub fn accept(self) -> deliver_sm_resp {

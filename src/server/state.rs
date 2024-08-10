@@ -32,7 +32,7 @@ pub (crate) struct WriteFrame {
     pub(crate) pdu: Vec<u8>
 }
 
-async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, stream: TcpStream, connection_information: SmppConnectionInformation, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, session_id: String) -> CLOSED {
+async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, stream: TcpStream, connection_information: SmppConnectionInformation, system_id: String, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, session_id: String) -> CLOSED {
     info!("[{} on server {}] {} going into read_loop with enquire_link_timer {}ms and inactivity_timer {}ms and read buffer size {} bytes", connection_information.client_address, connection_information.server_address, bound_type, enquire_link_timer, inactivity_timer, buffer_size);
     let sequence_number = Arc::new(AtomicU32::new(1));
     let alive = Arc::new(AtomicBool::new(false));
@@ -43,7 +43,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
 
     let (tx, rx) = channel::<WriteFrame>();
 
-    let mut pending_requests: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
+    let pending_requests: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let writer_alive = alive.clone();
     let writer_stream = writer.clone();
@@ -110,6 +110,9 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
     let mut last_read = Instant::now(); 
 
     (listener.on_esme_bound)(ESME {
+        client_address: connection_information.client_address.clone(), 
+        system_id: system_id.clone(),
+        session_id: session_id.clone(),
         can_receive: bound_type == BOUND_TYPE::BOUND_RX || bound_type == BOUND_TYPE::BOUND_TRX, 
         tx_channel: tx.clone(), 
         sequence_number }, &session_id 
@@ -413,8 +416,8 @@ pub (crate) struct BOUND_TX {
 }
 
 impl BOUND_TX {
-    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_TX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
+    pub(crate) async fn read_loop(self, system_id: String, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
+        read_loop(BOUND_TYPE::BOUND_TX, self.handler, self.stream, self.connection_information, system_id, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
     }
 }
 
@@ -427,8 +430,8 @@ pub (crate) struct BOUND_RX {
 }
 
 impl BOUND_RX {
-    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_RX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
+    pub(crate) async fn read_loop(self, system_id: String, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
+        read_loop(BOUND_TYPE::BOUND_RX, self.handler, self.stream, self.connection_information, system_id, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
     }
 }
 
@@ -442,8 +445,8 @@ pub (crate) struct BOUND_TRX {
 }
 
 impl BOUND_TRX {
-    pub(crate) async fn read_loop(self, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
-        read_loop(BOUND_TYPE::BOUND_TRX, self.handler, self.stream, self.connection_information, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
+    pub(crate) async fn read_loop(self, system_id: String, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> CLOSED {
+        read_loop(BOUND_TYPE::BOUND_TRX, self.handler, self.stream, self.connection_information, system_id, enquire_link_timer, inactivity_timer, response_timer, buffer_size, self.session_id).await
     }
 }
 
