@@ -1,5 +1,4 @@
-use std::{net::{IpAddr, SocketAddr}, sync::{atomic::{AtomicBool, Ordering, AtomicU32}, Arc, mpsc::Sender, Mutex}};
-use std::collections::HashSet;
+use std::{net::{IpAddr, SocketAddr}, sync::{atomic::{AtomicBool, Ordering, AtomicU32}, Arc, mpsc::Sender}};
 use futures::executor::block_on;
 use log::{info, error};
 use tokio::{task::{JoinHandle, self}, net::TcpListener, io::{AsyncReadExt, AsyncWriteExt}, time::timeout};
@@ -19,8 +18,7 @@ pub struct SmppServer {
     enquire_link_timer: u64,
     inactivity_timer: u64,
     response_timer: u64,
-    buffer_size: usize,
-    esmes: HashSet<ESME>
+    buffer_size: usize
 }
 
 
@@ -109,7 +107,7 @@ impl SmppServer {
     } 
 
     pub fn new_with_default_timers(address: IpAddr, port: u16, handler: Arc<SmppServerListener>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> SmppServer {
-        SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size, esmes: HashSet::new() }
+        SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size }
     } 
 
     pub fn start(&mut self) {

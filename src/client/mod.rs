@@ -1,10 +1,10 @@
-use core::{fmt};
-use std::{sync::{atomic::{AtomicU32, Ordering, AtomicBool}, mpsc::{Sender, channel}, Arc, Mutex}, net::{IpAddr, SocketAddr}, time::{Duration, Instant, SystemTime}, thread, collections::HashMap};
+use core::fmt;
+use std::{sync::{atomic::{AtomicU32, Ordering, AtomicBool}, mpsc::{Sender, channel}, Arc, Mutex}, net::{IpAddr, SocketAddr}, time::{Duration, Instant, SystemTime}, collections::HashMap};
 
 use bytes::BytesMut;
-use futures::{executor::block_on, channel::mpsc::unbounded};
+use futures::executor::block_on;
 use log::{info, error};
-use tokio::{task::{JoinHandle, self}, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{timeout, interval}};
+use tokio::{task::JoinHandle, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{timeout, interval}};
 use uuid::Uuid;
 
 use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver, deliver_sm, data_sm_resp, deliver_sm_resp, alert_notification, CommandHeader, WriteFrame, enquire_link};
@@ -123,16 +123,16 @@ impl SmppClient {
             panic!("Can not start client twice")
         }
 
-        info!("Starting smpp client for server {}:{}", self.server_address, self.server_port);
+        info!("Starting smpp client for server {}:{} with window size: {}", self.server_address, self.server_port, self.window_size);
         self.alive.store(true, Ordering::SeqCst);
 
         let server_socket_address = SocketAddr::new(self.server_address, self.server_port); // Will be moved out
         let alive = self.alive.clone();
-        let listener = self.handler.clone();
+        let _listener = self.handler.clone();
         let session_init_timer = self.session_init_timer;
         let enquire_link_timer = self.enquire_link_timer;
         let response_timer = self.response_timer;
-        let inactivity_timer = self.inactivity_timer;
+        let _inactivity_timer = self.inactivity_timer;
         let buffer_size: usize = self.buffer_size;
         let bind_type = self.bind_type.clone();
         let system_id = self.system_id.clone();
@@ -190,18 +190,18 @@ impl SmppClient {
                                 || (bind_type == BIND_TYPE::TX && header.command_id == CommandId::bind_transmitter_resp as u32) 
                                 || (bind_type == BIND_TYPE::TRX && header.command_id ==CommandId::bind_transceiver_resp as u32) 
                             ) {
-                                let session_id = Uuid::new_v4().to_string();
+                                let _session_id = Uuid::new_v4().to_string();
                                 info!("Successfuly bound in {} mode", bind_type);
 
-                                let (mut reader, writer) = stream.into_split();    
+                                let (_reader, writer) = stream.into_split();    
                                 let writer = Arc::new(Mutex::new(writer));
 
                                 let (tx, rx) = channel::<WriteFrame>();
-                                let mut pending_requests: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
+                                let pending_requests: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
 
-                                let read_timeout = tokio::time::Duration::from_millis(500); // Set a little time-out so we are able to detect if inactivity_timer or enquire_link timers expired
-                                let mut buffer = BytesMut::with_capacity(buffer_size);
-                                let mut last_read = Instant::now(); 
+                                let _read_timeout = tokio::time::Duration::from_millis(500); // Set a little time-out so we are able to detect if inactivity_timer or enquire_link timers expired
+                                let _buffer = BytesMut::with_capacity(buffer_size);
+                                let _last_read = Instant::now(); 
                                 let sequence_number = Arc::new(AtomicU32::new(2));
 
                                 let writer_alive = alive.clone();
@@ -212,7 +212,7 @@ impl SmppClient {
                                     while writer_alive.load(Ordering::SeqCst) {
                                     for frame in &rx {
                                         match block_on(writer_stream.lock().unwrap().write(&frame.pdu)) {
-                                            Ok(n) => { 
+                                            Ok(_) => { 
                                                 if frame.our_sequence_number.is_some() {
                                                     writer_pending_requests.lock().unwrap().insert(frame.our_sequence_number.unwrap(), SystemTime::now()); 
                                                 }
@@ -228,8 +228,8 @@ impl SmppClient {
                                 let enquire_link_sequence_number = sequence_number.clone();
                                 let enquire_link_writer = writer.clone();
                                 let enquire_link_writer_tx = tx.clone();
-                                let (enquire_link_tx, enquire_link_rx) = channel::<u32>();
-                                let enquire_link_ticker = tokio::task::spawn_blocking(move || {
+                                let (_enquire_link_tx, enquire_link_rx) = channel::<u32>();
+                                let _enquire_link_ticker = tokio::task::spawn_blocking(move || {
                                     info!("[{} on server {}] enquire_link timer started, sending every {}ms", connection_information.client_address, connection_information.server_address, enquire_link_timer);
                                     let mut enquire_link_timer = interval(Duration::from_millis(enquire_link_timer));
                                     let response_timer = Duration::from_millis(response_timer);

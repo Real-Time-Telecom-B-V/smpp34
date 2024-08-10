@@ -1,4 +1,3 @@
-use std::option;
 
 use log::warn;
 use num_traits::FromPrimitive;
