@@ -3,7 +3,7 @@ mod commands;
 use std::net::SocketAddr;
 
 use log::error;
-
+use serde::{Deserialize, Serialize};
 // Re-exports
 pub use commands::bind_transmitter::*;
 pub use commands::bind_receiver::*;
@@ -20,8 +20,6 @@ pub use commands::replace_sm::*;
 pub use commands::enquire_link::*;
 pub use commands::alert_notification::*;
 pub use commands::generic_nack::*;
-use serde::Deserialize;
-use serde::Serialize;
 
 
 /// The general format of an SMPP PDU consists of a PDU header followed by a PDU body
@@ -310,4 +308,12 @@ fn decode_bind_request(header: CommandHeader, pdu: &Vec<u8>) -> Result<CommonBin
 pub struct SmppConnectionInformation {
     pub server_address: SocketAddr,
     pub client_address: SocketAddr,
+}
+
+pub (crate) struct WriteFrame {
+    /// If a sequence number is set it's a request, so we expect a response, if not it's a response from our end
+    pub(crate) our_sequence_number: Option<u32>,
+
+    /// The actual PDU to send on the TCP connection
+    pub(crate) pdu: Vec<u8>
 }

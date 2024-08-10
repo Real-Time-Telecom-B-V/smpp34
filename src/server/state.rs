@@ -7,7 +7,7 @@ use futures::executor::block_on;
 use log::{info, error};
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{interval, timeout}};
 
-use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, enquire_link, server::ESME, deliver_sm_resp, data_sm_resp};
+use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, enquire_link, server::ESME, deliver_sm_resp, data_sm_resp, WriteFrame};
 
 use crate::SmppConnectionInformation;
 
@@ -22,14 +22,6 @@ impl fmt::Display for BOUND_TYPE {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
-}
-
-pub (crate) struct WriteFrame {
-    /// If a sequence number is set it's a request, so we expect a response, if not it's a response from our end
-    pub(crate) our_sequence_number: Option<u32>,
-
-    /// The actual PDU to send on the TCP connection
-    pub(crate) pdu: Vec<u8>
 }
 
 async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, stream: TcpStream, connection_information: SmppConnectionInformation, system_id: String, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, session_id: String) -> CLOSED {
@@ -144,6 +136,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                             let handler = listener.clone();
                                             let connection_information = connection_information.clone();
                                             let submit_sm_session_id = session_id.clone();
+
                                             tokio::task::spawn_blocking( move || {
                                                 let submit_sm_resp = (handler.on_submit_sm)(submit_sm.clone(), &connection_information, &submit_sm_session_id);
                                                 tx.send(WriteFrame { our_sequence_number: None, pdu: submit_sm_resp.encode() }).expect("Can not send to writer thread");
