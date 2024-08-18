@@ -3,7 +3,6 @@ mod commands;
 use std::net::SocketAddr;
 
 use log::error;
-use serde::{Deserialize, Serialize};
 // Re-exports
 pub use commands::bind_transmitter::*;
 pub use commands::bind_receiver::*;
@@ -26,7 +25,7 @@ pub use commands::generic_nack::*;
 /// 
 /// The SMPP Header is a mandatory part of every SMPP PDU and must always be present. The
 /// SMPP PDU Body is optional and may not be included with every SMPP PDU.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CommandHeader {
 
     /// The command_length parameter indicates the length in octets of the SMPP message. The SMPP

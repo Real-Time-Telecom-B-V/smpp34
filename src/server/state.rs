@@ -7,7 +7,7 @@ use futures::executor::block_on;
 use log::{info, error};
 use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{interval, timeout}};
 
-use crate::{common::SmppError, bind_transmitter, bind_receiver_resp, bind_receiver, bind_transceiver_resp, bind_transceiver, bind_transmitter_resp, CommandHeader, CommandId, SmppServerListener, submit_sm, unbind, enquire_link, server::ESME, deliver_sm_resp, data_sm_resp, WriteFrame};
+use crate::{bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, common::SmppError, data_sm_resp, deliver_sm_resp, enquire_link, server::ESME, submit_sm, unbind, CommandHeader, CommandId, SmppServerListener, WriteFrame};
 
 use crate::SmppConnectionInformation;
 
@@ -140,6 +140,24 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                             tokio::task::spawn_blocking( move || {
                                                 let submit_sm_resp = (handler.on_submit_sm)(submit_sm.clone(), &connection_information, &submit_sm_session_id);
                                                 tx.send(WriteFrame { our_sequence_number: None, pdu: submit_sm_resp.encode() }).expect("Can not send to writer thread");
+                                            });
+                                        },
+                                        Err(error) => {
+                                            error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
+                                            let error = submit_sm::generic_reject(potential_seq_no, error).encode();
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).expect("Can not send to writer thread");
+                                        }
+                                    }
+                                } else if header.command_id == CommandId::cancel_sm as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX)  {
+                                    match cancel_sm::decode(header, &pdu) {
+                                        Ok(cancel_sm) => {
+                                            let handler = listener.clone();
+                                            let connection_information = connection_information.clone();
+                                            let cancel_sm_session_id = session_id.clone();
+
+                                            tokio::task::spawn_blocking( move || {
+                                                let cancel_sm_resp = (handler.on_cancel_sm)(cancel_sm.clone(), &connection_information, &cancel_sm_session_id);
+                                                tx.send(WriteFrame { our_sequence_number: None, pdu: cancel_sm_resp.encode() }).expect("Can not send to writer thread");
                                             });
                                         },
                                         Err(error) => {

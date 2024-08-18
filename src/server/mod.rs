@@ -4,7 +4,7 @@ use log::{info, error};
 use tokio::{task::{JoinHandle, self}, net::TcpListener, io::{AsyncReadExt, AsyncWriteExt}, time::timeout};
 use uuid::Uuid;
 
-use crate::{server::state::OPEN, common::{CommandHeader, CommandId, SmppError}, bind_transmitter, bind_transmitter_resp, bind_transceiver, bind_receiver, bind_receiver_resp, unbind, unbind_resp, bind_transceiver_resp, submit_sm_resp, submit_sm, generic_nack, deliver_sm, alert_notification, data_sm, SmppConnectionInformation, deliver_sm_resp, data_sm_resp, WriteFrame};
+use crate::{alert_notification, bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, cancel_sm_resp, common::{CommandHeader, CommandId, SmppError}, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, generic_nack, server::state::OPEN, submit_sm, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation, WriteFrame};
 
 mod state;
 
@@ -83,6 +83,7 @@ pub struct SmppServerListener {
     pub on_bind_transceiver: fn(bind_transceiver, &SmppConnectionInformation, session_id: &String) -> bind_transceiver_resp,
     pub on_unbind: fn(unbind, &SmppConnectionInformation, session_id: &String) -> unbind_resp,
     pub on_submit_sm: fn(submit_sm, &SmppConnectionInformation, session_id: &String) ->  submit_sm_resp,
+    pub on_cancel_sm: fn(cancel_sm, &SmppConnectionInformation, session_id: &String) -> cancel_sm_resp,
 
     pub on_deliver_sm_resp: fn(deliver_sm_resp, &SmppConnectionInformation, session_id: &String),
     pub on_data_sm_resp: fn(data_sm_resp, &SmppConnectionInformation, session_id: &String),

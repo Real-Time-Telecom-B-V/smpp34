@@ -7,7 +7,7 @@ use log::{info, error};
 use tokio::{task::JoinHandle, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{timeout, interval}};
 use uuid::Uuid;
 
-use crate::{SmppConnectionInformation, unbind_resp, unbind, submit_sm_resp, data_sm, submit_sm, bind_receiver, SmppError, CommandId, bind_transmitter, bind_transceiver, deliver_sm, data_sm_resp, deliver_sm_resp, alert_notification, CommandHeader, WriteFrame, enquire_link};
+use crate::{alert_notification, bind_receiver, bind_transceiver, bind_transmitter, cancel_sm, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, enquire_link, submit_sm, submit_sm_resp, unbind, unbind_resp, CommandHeader, CommandId, SmppConnectionInformation, SmppError, WriteFrame};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BIND_TYPE {
@@ -77,6 +77,13 @@ impl SMSC {
         let sequence_number = self.next_sequence_number();
         let data_sm = data_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, registered_delivery, data_coding);
         self.tx_channel.send(data_sm.encode()).expect("Unable to send data_sm request to writer thread");
+        sequence_number
+    }
+
+    pub fn send_cancel_sm(&self, service_type: String, message_id: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String) -> u32 {
+        let sequence_number = self.next_sequence_number();
+        let cancel_sm = cancel_sm::new(sequence_number.clone(), service_type, message_id, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr);
+        self.tx_channel.send(cancel_sm.encode()).expect("Unable to send cancel_sm request to writer thread");
         sequence_number
     }
     

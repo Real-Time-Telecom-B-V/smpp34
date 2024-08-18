@@ -1,5 +1,5 @@
 use log::{error, info};
-use smpp34::{server::ESME, bind_transmitter, bind_transmitter_resp, bind_receiver, bind_receiver_resp, SmppError, bind_transceiver, bind_transceiver_resp, unbind, unbind_resp, submit_sm_resp, submit_sm, SmppConnectionInformation, deliver_sm_resp, data_sm_resp};
+use smpp34::{bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, cancel_sm_resp, data_sm_resp, deliver_sm_resp, server::ESME, submit_sm, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation, SmppError};
 
 
 
@@ -43,6 +43,11 @@ pub fn on_submit_sm(request: submit_sm, connection_information: &SmppConnectionI
     request.accept(String::from("1234"))
 }
 
+pub fn on_cancel_sm(request: cancel_sm, connection_information: &SmppConnectionInformation, session_id: &String) -> cancel_sm_resp {
+    info!("[cancel_sm@{}] <{}> {:?}", connection_information.server_address, connection_information.client_address, request);
+    request.accept()
+}
+
 pub fn on_deliver_sm_resp(response: deliver_sm_resp, connection_information: &SmppConnectionInformation, session_id: &String)  {
     info!("[deliver_sm_resp@{}] <{}> {:?}", connection_information.server_address, connection_information.client_address, response);
 }
@@ -77,6 +82,7 @@ mod tests {
             on_bind_transceiver, 
             on_unbind,
             on_submit_sm,
+            on_cancel_sm,
             on_deliver_sm_resp,
             on_data_sm_resp,
             on_timeout,
