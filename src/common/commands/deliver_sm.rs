@@ -207,7 +207,8 @@ impl deliver_sm_resp {
         buffer
      }
 
-     pub fn decode(_header: CommandHeader, _pdu: &Vec<u8>) -> Result<deliver_sm_resp, SmppError> {
-        todo!()
+     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<deliver_sm_resp, SmppError> {
+        let message_id = parse_c_octet_string(pdu[..].to_vec(), 0)?;
+        Ok(deliver_sm_resp { header, message_id })
      }
 }
