@@ -1,7 +1,11 @@
 mod commands;
 
+use std::time::SystemTime;
+
 use std::net::SocketAddr;
 
+use chrono::DateTime;
+use chrono::Utc;
 use log::error;
 // Re-exports
 pub use commands::bind_transmitter::*;
@@ -83,6 +87,41 @@ impl CommandHeader {
         buffer.append(&mut self.sequence_number.to_be_bytes().to_vec());
         buffer
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeliveryReceipt {
+    pub id: String,
+    pub sub: u8,
+    pub dlvrd: u8,
+    pub submit_date: String,
+    pub done_date: String,
+    pub stat: String,
+    pub err: String,
+    pub text: String,
+}
+
+impl DeliveryReceipt {
+
+    pub fn new(id: String, sub: u8, dlvrd: u8, submit_date: DateTime<Utc> , done_date: DateTime<Utc>, stat: String, err: String, text: String) -> DeliveryReceipt {
+        
+        DeliveryReceipt {
+            id,
+            sub,
+            dlvrd,
+            submit_date: submit_date.format("%y%m%d%H%M").to_string(),
+            done_date: done_date.format("%y%m%d%H%M").to_string(),
+            stat,
+            err,
+            text,
+        }
+    }
+
+    pub fn encode(&self) -> String {
+        format!("id:{} sub:{} dlvrd:{} submit date:{} done date:{} stat:{} err:{} text:{}",
+            self.id, self.sub, self.dlvrd, self.submit_date, self.done_date, self.stat, self.err, self.text)
+    }
+
 }
 
 #[derive(Debug, PartialEq, FromPrimitive)]
