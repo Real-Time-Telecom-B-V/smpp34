@@ -68,8 +68,8 @@ mod tests {
     
         let mut client = SmppClient::new("127.0.0.1".to_owned() ,2775, false,
             BIND_TYPE::TRX, 
-            "66wnb9e8".to_owned(), 
-            "x445cre7".to_owned(), 
+            "username".to_owned(), 
+            "password".to_owned(), 
             "GATEWAY".to_owned(), 
             1, 
             1, 
