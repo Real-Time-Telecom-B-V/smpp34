@@ -1,11 +1,10 @@
 use nom::{
-    bytes::complete::{take, take_until, take_while},
-    number::complete::{be_u32, be_u8},
+    number::complete::be_u8,
     IResult,
 };
 use num_traits::FromPrimitive;
 
-use crate::{CommandHeader, CommandId, SmppError};
+use crate::{common::parse_c_octet_string_nom, CommandHeader, CommandId, SmppError};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct cancel_sm {
@@ -24,26 +23,21 @@ pub struct cancel_sm_resp {
     header: CommandHeader
 }
 
-// Helper to parse C-Octet strings (null-terminated)
-fn parse_c_octet_string(input: &[u8]) -> IResult<&[u8], String> {
-    let (input, result) = take_until("\0")(input)?;
-    let (input, _) = take(1usize)(input)?; // consume the null byte
-    Ok((input, String::from_utf8_lossy(result).to_string()))
-}
+
 
 // Function to parse cancel_sm PDU
 fn parse_cancel_sm(header: CommandHeader, pdu: &[u8]) -> IResult<&[u8], cancel_sm> {
     
-    let (pdu, service_type) = parse_c_octet_string(pdu)?;
-    let (pdu, message_id) = parse_c_octet_string(pdu)?;
+    let (pdu, service_type) = parse_c_octet_string_nom(pdu)?;
+    let (pdu, message_id) = parse_c_octet_string_nom(pdu)?;
     
     let (pdu, source_addr_ton) = be_u8(pdu)?;
     let (pdu, source_addr_npi) = be_u8(pdu)?;
-    let (pdu, source_addr) = parse_c_octet_string(pdu)?;
+    let (pdu, source_addr) = parse_c_octet_string_nom(pdu)?;
     
     let (pdu, dest_addr_ton) = be_u8(pdu)?;
     let (pdu, dest_addr_npi) = be_u8(pdu)?;
-    let (pdu, destination_addr) = parse_c_octet_string(pdu)?;
+    let (pdu, destination_addr) = parse_c_octet_string_nom(pdu)?;
 
     Ok((pdu, cancel_sm {
         header,

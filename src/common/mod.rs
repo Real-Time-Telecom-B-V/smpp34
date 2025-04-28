@@ -1,7 +1,5 @@
 mod commands;
 
-use std::time::SystemTime;
-
 use std::net::SocketAddr;
 
 use chrono::DateTime;
@@ -24,6 +22,10 @@ pub use commands::enquire_link::*;
 pub use commands::alert_notification::*;
 pub use commands::generic_nack::*;
 
+use nom::{
+    bytes::complete::{take, take_until},
+    IResult,
+};
 
 /// The general format of an SMPP PDU consists of a PDU header followed by a PDU body
 /// 
@@ -295,6 +297,13 @@ fn parse_c_octet_string(bytes: Vec<u8>, maximum_length: usize) -> Result<String,
         error!("Can not find null byte at all, C-Octet-String not terminated?!");
         Err(SmppError::ESME_RINVPARLEN)
     }
+}
+
+// Helper to parse C-Octet strings (null-terminated)
+fn parse_c_octet_string_nom(input: &[u8]) -> IResult<&[u8], String> {
+    let (input, result) = take_until("\0")(input)?;
+    let (input, _) = take(1usize)(input)?; // consume the null byte
+    Ok((input, String::from_utf8_lossy(result).to_string()))
 }
 
 fn parse_octet_string(bytes: Vec<u8>, supposed_length: usize, maximum_length: usize) -> Result<String, SmppError> {

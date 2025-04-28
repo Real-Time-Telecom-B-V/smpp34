@@ -67,7 +67,7 @@ impl submit_sm {
     }
 
     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<submit_sm, SmppError> {
-        warn!("Decode not fully implemented yet, optional parameters not available");
+        warn!("Decode of submit_sm not fully implemented yet, optional parameters not available");
     
         let service_type = parse_c_octet_string(pdu[16..].to_vec(), 6)?;
 
@@ -182,5 +182,10 @@ impl submit_sm_resp {
         }
 
         buffer
+     }
+
+     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<submit_sm_resp, SmppError> {
+        let message_id = parse_c_octet_string(pdu[16..].to_vec(), 65)?;
+        Ok(submit_sm_resp { header, message_id: Some(message_id) })
      }
 }

@@ -125,6 +125,22 @@ impl unbind_resp {
 
     /// Encode a unbind_resp based on inner command header
     pub fn encode(self) -> Vec<u8> { self.header.encode() }
+
+    /// Decode a unbind_resp
+    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<unbind_resp, SmppError> {
+        if header.command_id == CommandId::unbind_resp as u32 {
+            if pdu.len() == 16 {
+                Ok(unbind_resp {
+                    header,
+                })
+            } else {
+                Err(SmppError::ESME_ROPTPARNOTALLWD) // Body should be empty
+            }
+        }
+        else {
+            panic!("Passed a non unbind_resp to decode()")
+        }
+    }
 }
 
 #[cfg(test)]
