@@ -1,11 +1,10 @@
-use std::{sync::{Arc, Mutex, atomic::{AtomicBool, Ordering, AtomicU32}, mpsc::channel}, time::{Duration, Instant, SystemTime}, fmt, collections::HashMap};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering, AtomicU32}}, time::{Duration, Instant, SystemTime}, fmt, collections::HashMap};
 
 use bytes::BytesMut;
 
 
-use futures::executor::block_on;
 use log::{info, error};
-use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}, time::{interval, timeout}};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::{mpsc::channel, Mutex}, time::{interval, timeout}};
 
 use crate::{bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, common::SmppError, data_sm_resp, deliver_sm_resp, enquire_link, server::ESME, submit_sm, unbind, CommandHeader, CommandId, SmppServerListener, WriteFrame};
 
@@ -24,7 +23,7 @@ impl fmt::Display for BOUND_TYPE {
     }
 }
 
-async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, stream: TcpStream, connection_information: SmppConnectionInformation, system_id: String, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, session_id: String) -> CLOSED {
+async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener + Send + Sync + 'static>, stream: TcpStream, connection_information: SmppConnectionInformation, system_id: String, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, session_id: String) -> CLOSED {
     info!("[{} on server {}] {} going into read_loop with enquire_link_timer {}ms and inactivity_timer {}ms and read buffer size {} bytes", connection_information.client_address, connection_information.server_address, bound_type, enquire_link_timer, inactivity_timer, buffer_size);
     let sequence_number = Arc::new(AtomicU32::new(1));
     let alive = Arc::new(AtomicBool::new(false));
@@ -33,25 +32,28 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
     let (mut reader, writer) = stream.into_split();    
     let writer = Arc::new(Mutex::new(writer));
 
-    let (tx, rx) = channel::<WriteFrame>();
+    let (tx, mut rx) = channel::<WriteFrame>(100);
 
     let pending_requests: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let writer_alive = alive.clone();
     let writer_stream = writer.clone();
     let writer_pending_requests = pending_requests.clone();
-    let writer_thread = tokio::task::spawn_blocking(move || {
+    let writer_thread = tokio::task::spawn(async move {
         info!("[{} on server {}] writer thread started", connection_information.client_address, connection_information.server_address);
         while writer_alive.load(Ordering::SeqCst) {
-           for frame in &rx {
-            match block_on(writer_stream.lock().unwrap().write(&frame.pdu)) {
-                Ok(_) => { 
-                    if frame.our_sequence_number.is_some() {
-                        writer_pending_requests.lock().unwrap().insert(frame.our_sequence_number.unwrap(), SystemTime::now()); 
-                    }
-                },
-                Err(e) => { error!("Unable to write to TCP stream {}", e) },
-            }
+           if let Some(frame) = rx.recv().await {
+                match writer_stream.lock().await.write(&frame.pdu).await {
+                    Ok(_) => { 
+                        if frame.our_sequence_number.is_some() {
+                            writer_pending_requests.lock().await.insert(frame.our_sequence_number.unwrap(), SystemTime::now()); 
+                        }
+                    },
+                    Err(e) => { error!("Unable to write to TCP stream {}", e) },
+                }
+           } else {
+                error!("[{} on server {}] writer thread unable to receive frame", connection_information.client_address, connection_information.server_address);
+                break;
            }
         }
         info!("[{} on server {}] writer thread stopped", connection_information.client_address, connection_information.server_address);
@@ -61,38 +63,38 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
     let enquire_link_sequence_number = sequence_number.clone();
     let enquire_link_writer = writer.clone();
     let enquire_link_writer_tx = tx.clone();
-    let (enquire_link_tx, enquire_link_rx) = channel::<u32>();
-    let enquire_link_ticker = tokio::task::spawn_blocking(move || {
+    let (enquire_link_tx, mut enquire_link_rx) = channel::<u32>(100); // Explicitly a sync channel
+    let enquire_link_ticker = tokio::task::spawn(async move {
         info!("[{} on server {}] enquire_link timer started, sending every {}ms", connection_information.client_address, connection_information.server_address, enquire_link_timer);
         let mut enquire_link_timer = interval(Duration::from_millis(enquire_link_timer));
         let response_timer = Duration::from_millis(response_timer);
-        block_on(enquire_link_timer.tick()); // tick for the first time to warm the timer
-        block_on(enquire_link_timer.tick()); // tick for the second time to start sending enquire_links only on next interval (as we just opened the connection it makes no sense to tick immediately)
+        enquire_link_timer.tick().await; // tick for the first time to warm the timer
+        enquire_link_timer.tick().await; // tick for the second time to start sending enquire_links only on next interval (as we just opened the connection it makes no sense to tick immediately)
 
         while send_enquire_link.load(Ordering::SeqCst) {
             let sequence_number = enquire_link_sequence_number.fetch_add(1, Ordering::SeqCst);
-            info!("[{} on server {}] enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, sequence_number);
+            info!("[{} on server {}] sending enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, sequence_number);
 
-            enquire_link_writer_tx.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: enquire_link::new(sequence_number).encode() }).expect("Can not send to writer thread");
+            enquire_link_writer_tx.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: enquire_link::new(sequence_number).encode() }).await.expect("Can not send to writer thread");
 
-            match enquire_link_rx.recv_timeout(response_timer) {
-                Ok(sequence) => {
+            match enquire_link_rx.recv().await {
+                Some(sequence) => {
                     // We want the sequence number to match, otherwise we must kill this bind
                     if sequence != sequence_number { 
-                        error!("[{} on server {}] enquire_link_resp with sequence_number {} did not match sequence_number {}", connection_information.client_address, connection_information.server_address, sequence, sequence_number);
-                        block_on(enquire_link_writer.lock().unwrap().shutdown()).expect("Unable to close TCP stream");
+                        error!("[{} on server {}] received enquire_link_resp with sequence_number {} did not match sequence_number {}", connection_information.client_address, connection_information.server_address, sequence, sequence_number);
+                        enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
                         break;
                     } 
-            },
-                Err(_e) => {
-                    error!("[{} on server {}] enquire_link with sequence_number {} no response within {}ms", connection_information.client_address, connection_information.server_address, sequence_number, response_timer.as_millis());
-                    block_on(enquire_link_writer.lock().unwrap().shutdown()).expect("Unable to close TCP stream");
+                },
+                None => {
+                    error!("[{} on server {}] sent enquire_link with sequence_number {} no response within {}ms", connection_information.client_address, connection_information.server_address, sequence_number, response_timer.as_millis());
+                    enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
                     break;
                 }
             }
     
             // Wait for next interval to send timer again
-            block_on(enquire_link_timer.tick());
+            enquire_link_timer.tick().await;
         }
         info!("[{} on server {}] enquire_link timer stopped", connection_information.client_address, connection_information.server_address);
     });
@@ -101,14 +103,14 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
     let mut buffer = BytesMut::with_capacity(buffer_size);
     let mut last_read = Instant::now(); 
 
-    (listener.on_esme_bound)(ESME {
+    listener.on_esme_bound(ESME {
         client_address: connection_information.client_address.clone(), 
         system_id: system_id.clone(),
         session_id: session_id.clone(),
         can_receive: bound_type == BOUND_TYPE::BOUND_RX || bound_type == BOUND_TYPE::BOUND_TRX, 
         tx_channel: tx.clone(), 
         sequence_number }, &session_id 
-    );
+    ).await;
 
     loop {
         let result = timeout(read_timeout, reader.read_buf(&mut buffer)).await;
@@ -136,16 +138,13 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                             let handler = listener.clone();
                                             let connection_information = connection_information.clone();
                                             let submit_sm_session_id = session_id.clone();
-
-                                            tokio::task::spawn_blocking( move || {
-                                                let submit_sm_resp = (handler.on_submit_sm)(submit_sm.clone(), &connection_information, &submit_sm_session_id);
-                                                tx.send(WriteFrame { our_sequence_number: None, pdu: submit_sm_resp.encode() }).expect("Can not send to writer thread");
-                                            });
+                                            let submit_sm_resp = handler.on_submit_sm(submit_sm.clone(), &connection_information, &submit_sm_session_id).await;
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: submit_sm_resp.encode() }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
                                         }
                                     }
                                 } else if header.command_id == CommandId::cancel_sm as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX)  {
@@ -155,38 +154,37 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                             let connection_information = connection_information.clone();
                                             let cancel_sm_session_id = session_id.clone();
 
-                                            tokio::task::spawn_blocking( move || {
-                                                let cancel_sm_resp = (handler.on_cancel_sm)(cancel_sm.clone(), &connection_information, &cancel_sm_session_id);
-                                                tx.send(WriteFrame { our_sequence_number: None, pdu: cancel_sm_resp.encode() }).expect("Can not send to writer thread");
-                                            });
+                                            let cancel_sm_resp = handler.on_cancel_sm(cancel_sm.clone(), &connection_information, &cancel_sm_session_id).await;
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: cancel_sm_resp.encode() }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
                                         }
                                     }
                                 } else if header.command_id == CommandId::enquire_link as u32 {
                                     match enquire_link::decode(header, &pdu) {
                                         Ok(enquire_link) => {
-                                            info!("[{} on server {}] enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                            info!("[{} on server {}] received enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                             let enquire_link_resp = enquire_link.accept();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: enquire_link_resp.encode() }).expect("Can not send to writer thread");
+                                            info!("[{} on server {}] sending enquire_link_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: enquire_link_resp.encode() }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode enquire_link", connection_information.client_address, connection_information.server_address);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
                                         }
                                     }
                                 } else if header.command_id == CommandId::enquire_link_resp as u32 {
-                                    info!("[{} on server {}] enquire_link_resp received for sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                    info!("[{} on server {}] received enquire_link_resp for sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
 
                                     // Send it to enquire_link thread for verification, it's waiting on it!
-                                    enquire_link_tx.send(header.sequence_number).expect("Unable to send sequence to enquire_link thread");
+                                    enquire_link_tx.send(header.sequence_number).await.expect("Unable to send sequence to enquire_link thread");
 
                                     // Cleanup pending requests
-                                    let mut guard = pending_requests.lock().unwrap();
+                                    let mut guard = pending_requests.lock().await;
                                     if let Some(time) = guard.remove(&header.sequence_number) {
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
@@ -194,7 +192,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                         let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
                                         if  lapsed > response_timer.into() {
                                             error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
-                                            (listener.on_timeout)(header.sequence_number, &session_id);  // TODO Should we spawn a task?
+                                            listener.on_timeout(header.sequence_number, &session_id).await;
                                         } 
 
                                     } else {
@@ -208,13 +206,13 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
 
                                     match unbind::decode(header, &pdu) {
                                         Ok(unbind) => {
-                                            let unbind_resp = (listener.on_unbind)(unbind.clone(), &connection_information, &session_id);
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: unbind_resp.encode() }).expect("Can not send to writer thread");
+                                            let unbind_resp = listener.on_unbind(unbind.clone(), &connection_information, &session_id).await;
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: unbind_resp.encode() }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode unbind", connection_information.client_address, connection_information.server_address);
                                             let error = unbind::generic_reject(potential_seq_no, error).encode();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
                                         }
                                     }
 
@@ -222,7 +220,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
 
                                     break; 
                                 } else if header.command_id == CommandId::deliver_sm_resp as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX) {
-                                    let mut guard = pending_requests.lock().unwrap();
+                                    let mut guard = pending_requests.lock().await;
                                     if let Some(time) = guard.remove(&header.sequence_number) {
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
@@ -230,21 +228,19 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                         let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
                                         if  lapsed > response_timer.into() {
                                             error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
-                                            (listener.on_timeout)(header.sequence_number, &session_id);  // TODO Should we spawn a task?
+                                            listener.on_timeout(header.sequence_number, &session_id).await;
                                         } else {
                                             match deliver_sm_resp::decode(header, &pdu) {
                                                 Ok(deliver_sm_resp) => {
                                                     let handler = listener.clone();
                                                     let connection_information = connection_information.clone();
                                                     let submit_sm_session_id = session_id.clone();
-                                                    tokio::task::spawn_blocking( move || { // This might block due to I/O happening underneath (DB writing) so spawn it blocking
-                                                        (handler.on_deliver_sm_resp)(deliver_sm_resp.clone(), &connection_information, &submit_sm_session_id);
-                                                    });
+                                                    handler.on_deliver_sm_resp(deliver_sm_resp.clone(), &connection_information, &submit_sm_session_id).await;
                                                 },
                                                 Err(error) => {
                                                     error!("[{} on server {}] unable to decode deliver_sm_resp", connection_information.client_address, connection_information.server_address);
                                                     let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                                    tx.send(WriteFrame { our_sequence_number: None, pdu: error }).expect("Can not send to writer thread");
+                                                    tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
                                                 }
                                             }
                                         }
@@ -253,7 +249,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                         error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                     }
                                 } else if header.command_id == CommandId::data_sm_resp as u32 {
-                                    let mut guard = pending_requests.lock().unwrap();
+                                    let mut guard = pending_requests.lock().await;
                                     if let Some(time) = guard.remove(&header.sequence_number) {
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
@@ -261,21 +257,19 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                         let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
                                         if  lapsed > response_timer.into() {
                                             error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
-                                            (listener.on_timeout)(header.sequence_number, &session_id);  // TODO Should we spawn a task?
+                                            listener.on_timeout(header.sequence_number, &session_id).await;
                                         } else {
                                             match data_sm_resp::decode(header, &pdu) {
                                                 Ok(data_sm_resp) => {
                                                     let handler = listener.clone();
                                                     let connection_information = connection_information.clone();
                                                     let submit_sm_session_id = session_id.clone();
-                                                    tokio::task::spawn_blocking( move || { // This might block due to I/O happening underneath (DB writing) so spawn it blocking
-                                                        (handler.on_data_sm_resp)(data_sm_resp.clone(), &connection_information, &submit_sm_session_id);
-                                                    });
+                                                    handler.on_data_sm_resp(data_sm_resp.clone(), &connection_information, &submit_sm_session_id).await;
                                                 },
                                                 Err(error) => {
                                                     error!("[{} on server {}] unable to decode data_sm_resp", connection_information.client_address, connection_information.server_address);
                                                     let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                                    tx.send(WriteFrame { our_sequence_number: None, pdu: error }).expect("Can not send to writer thread");
+                                                    tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
                                                 }
                                             }
                                         }
@@ -286,13 +280,13 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                                 } else {
                                     error!("[{} on server {}] Did not expect command_id {} for this bind, sending ESME_RINVBNDSTS in generick_nack", connection_information.client_address, connection_information.server_address, header.command_id);
                                     let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVBNDSTS as u32, sequence_number: potential_seq_no };
-                                    tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).expect("Can not send to writer thread");
+                                    tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).await.expect("Can not send to writer thread");
                                 }
                             },
                             Err(error) => {
                                 error!("[{} on server {}] Unable to decode command_header for PDU, sending {:?} in generic_nack", connection_information.client_address, connection_information.server_address, error); 
                                 let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
-                                tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).expect("Can not send to writer thread");
+                                tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).await.expect("Can not send to writer thread");
 
                                 enquire_link_ticker.abort(); // When the TCP stream is closed stop enquiring the link
                             } 
@@ -308,7 +302,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                     last_read = Instant::now();
 
                     // Last thing to do is general time-out detection
-                    let mut pending_requests = pending_requests.lock().unwrap();
+                    let mut pending_requests = pending_requests.lock().await;
 
                     for (sequence_number, time) in pending_requests.iter_mut() {
                         let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
@@ -316,8 +310,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
                            // pending_requests.remove(&sequence_number_to_remove);
                             error!("[{} on server {}] Response for sequence_number {} did not come in after {}ms lapsed", connection_information.client_address, connection_information.server_address, sequence_number, lapsed);
                             
-                            (listener.on_timeout)(sequence_number.clone(), &session_id); // TODO Should we spawn a task?
-                            
+                            listener.on_timeout(sequence_number.clone(), &session_id).await;
                         }
                     }
                 }
@@ -342,7 +335,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<SmppServerListener>, st
         buffer.clear(); // Make sure we start reading with an empty buffer
     }
 
-    (listener.on_esme_unbound)(&session_id);
+    listener.on_esme_unbound(&session_id).await;
 
     info!("[{} on server {}] {} going to CLOSED state", connection_information.client_address, connection_information.server_address, bound_type);
     alive.store(false, Ordering::SeqCst);
@@ -364,7 +357,7 @@ pub (crate) struct OPEN {
 }
 
 impl OPEN {
-    pub(crate) async fn bind_transmitter(self, mut stream: TcpStream, bind_transmitter: bind_transmitter, bind_transmitter_resp: &bind_transmitter_resp, connection_information: &SmppConnectionInformation, handler: Arc<SmppServerListener>) -> Result<BOUND_TX, SmppError> {
+    pub(crate) async fn bind_transmitter(self, mut stream: TcpStream, bind_transmitter: bind_transmitter, bind_transmitter_resp: &bind_transmitter_resp, connection_information: &SmppConnectionInformation, handler: Arc<dyn SmppServerListener + Send + Sync + 'static>) -> Result<BOUND_TX, SmppError> {
         if bind_transmitter_resp.is_success() {
             let result = stream.write(&bind_transmitter_resp.clone().encode()).await;
             if result.is_ok() {
@@ -386,7 +379,7 @@ impl OPEN {
         }
     }
 
-    pub(crate) async fn bind_receiver(self, mut stream: TcpStream, bind_receiver: bind_receiver, bind_receiver_resp: bind_receiver_resp, connection_information: &SmppConnectionInformation, handler: Arc<SmppServerListener>) -> Result<BOUND_RX, SmppError> {
+    pub(crate) async fn bind_receiver(self, mut stream: TcpStream, bind_receiver: bind_receiver, bind_receiver_resp: bind_receiver_resp, connection_information: &SmppConnectionInformation, handler: Arc<dyn SmppServerListener + Send + Sync + 'static>) -> Result<BOUND_RX, SmppError> {
         if bind_receiver_resp.is_success() {
             let result = stream.write(&bind_receiver_resp.encode()).await;
             if result.is_ok() {
@@ -408,7 +401,7 @@ impl OPEN {
         }
     }
 
-    pub(crate) async fn bind_transceiver(self, mut stream: TcpStream, bind_transceiver: bind_transceiver, bind_transceiver_resp: &bind_transceiver_resp, connection_information: &SmppConnectionInformation, handler: Arc<SmppServerListener>) -> Result<BOUND_TRX, SmppError> {
+    pub(crate) async fn bind_transceiver(self, mut stream: TcpStream, bind_transceiver: bind_transceiver, bind_transceiver_resp: &bind_transceiver_resp, connection_information: &SmppConnectionInformation, handler: Arc<dyn SmppServerListener + Send + Sync + 'static>) -> Result<BOUND_TRX, SmppError> {
         if bind_transceiver_resp.is_success() {
             let result = stream.write(&bind_transceiver_resp.clone().encode()).await;
             if result.is_ok() {
@@ -437,7 +430,7 @@ pub (crate) struct BOUND_TX {
     pub (crate) session_id: String,
     stream: TcpStream,
     system_id: String,
-    handler: Arc<SmppServerListener>,
+    handler: Arc<dyn SmppServerListener + Send + Sync + 'static>,
     connection_information: SmppConnectionInformation,
 }
 
@@ -451,7 +444,7 @@ pub (crate) struct BOUND_RX {
     pub (crate) session_id: String,
     stream: TcpStream,
     system_id: String,
-    handler: Arc<SmppServerListener>,
+    handler: Arc<dyn SmppServerListener + Send + Sync>,
     connection_information: SmppConnectionInformation,
 }
 
@@ -466,7 +459,7 @@ pub (crate) struct BOUND_TRX {
     pub (crate) session_id: String,
     stream: TcpStream,
     system_id: String,
-    handler: Arc<SmppServerListener>,
+    handler: Arc<dyn SmppServerListener + Send + Sync>,
     connection_information: SmppConnectionInformation,
 }
 
