@@ -417,36 +417,64 @@ impl SmppClient {
                                                                     }
                                                                 }
                                                             } else if header.command_id == CommandId::submit_sm_resp as u32 && (bind_type == BIND_TYPE::TX || bind_type == BIND_TYPE::TRX) {
-                                                                match submit_sm_resp::decode(header, &pdu) {
-                                                                    Ok(submit_sm_resp) => {
-                                                                        info!("[{} on server {}] received submit_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                                                        let handler = listener.clone();
-                                                                        let connection_information = connection_information.clone();
-                                                                        let submit_sm_session_id = session_id.clone();
+                                                                let mut guard = pending_requests.lock().await;
+                                                                if let Some(time) = guard.remove(&header.sequence_number) {
+                                                                    drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
-                                                                        handler.on_submit_sm_resp(submit_sm_resp.clone(), &connection_information, &submit_sm_session_id).await;
-                                                                    },
-                                                                    Err(error) => {
-                                                                        error!("[{} on server {}] unable to decode submit_sm_resp", connection_information.client_address, connection_information.server_address);
-                                                                        let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
-                                                                        tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).await.expect("Can not send to writer thread");
+                                                                    // Time-out detection
+                                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
+                                                                    if  lapsed > response_timer.into() {
+                                                                        error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
+                                                                        listener.on_timeout(header.sequence_number, &session_id).await;
+                                                                    } else {
+                                                                        match submit_sm_resp::decode(header, &pdu) {
+                                                                            Ok(submit_sm_resp) => {
+                                                                                info!("[{} on server {}] received submit_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                                                                let handler = listener.clone();
+                                                                                let connection_information = connection_information.clone();
+                                                                                let submit_sm_session_id = session_id.clone();
+        
+                                                                                handler.on_submit_sm_resp(submit_sm_resp.clone(), &connection_information, &submit_sm_session_id).await;
+                                                                            },
+                                                                            Err(error) => {
+                                                                                error!("[{} on server {}] unable to decode submit_sm_resp", connection_information.client_address, connection_information.server_address);
+                                                                                let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
+                                                                                tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).await.expect("Can not send to writer thread");
+                                                                            }
+                                                                        }
                                                                     }
+                                                                } else {
+                                                                    error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                                                 }
                                                             } else if header.command_id == CommandId::data_sm_resp as u32 && (bind_type == BIND_TYPE::TX || bind_type == BIND_TYPE::TRX) {
-                                                                match data_sm_resp::decode(header, &pdu) {
-                                                                    Ok(data_sm_resp) => {
-                                                                        info!("[{} on server {}] received data_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                                                        let handler = listener.clone();
-                                                                        let connection_information = connection_information.clone();
-                                                                        let data_sm_session_id = session_id.clone();
+                                                                let mut guard = pending_requests.lock().await;
+                                                                if let Some(time) = guard.remove(&header.sequence_number) {
+                                                                    drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
-                                                                        handler.on_data_sm_resp(data_sm_resp.clone(), &connection_information, &data_sm_session_id).await;
-                                                                    },
-                                                                    Err(error) => {
-                                                                        error!("[{} on server {}] unable to decode data_sm_resp", connection_information.client_address, connection_information.server_address);
-                                                                        let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
-                                                                        tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).await.expect("Can not send to writer thread");
+                                                                    // Time-out detection
+                                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
+                                                                    if  lapsed > response_timer.into() {
+                                                                        error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
+                                                                        listener.on_timeout(header.sequence_number, &session_id).await;
+                                                                    } else {
+                                                                        match data_sm_resp::decode(header, &pdu) {
+                                                                            Ok(data_sm_resp) => {
+                                                                                info!("[{} on server {}] received data_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                                                                let handler = listener.clone();
+                                                                                let connection_information = connection_information.clone();
+                                                                                let data_sm_session_id = session_id.clone();
+        
+                                                                                handler.on_data_sm_resp(data_sm_resp.clone(), &connection_information, &data_sm_session_id).await;
+                                                                            },
+                                                                            Err(error) => {
+                                                                                error!("[{} on server {}] unable to decode data_sm_resp", connection_information.client_address, connection_information.server_address);
+                                                                                let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
+                                                                                tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).await.expect("Can not send to writer thread");
+                                                                            }
+                                                                        }
                                                                     }
+                                                                } else {
+                                                                    error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                                                 }
                                                             } else if header.command_id == CommandId::alert_notification as u32 {
                                                                 match alert_notification::decode(header, &pdu) {

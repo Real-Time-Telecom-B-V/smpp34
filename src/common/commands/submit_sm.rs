@@ -125,7 +125,42 @@ impl submit_sm {
     }
 
     pub fn encode(self) -> Vec<u8> {
-        todo!()
+        let mut buffer:Vec<u8> = Vec::with_capacity(self.header.command_length.try_into().unwrap());
+        buffer.append(&mut self.header.encode());
+        buffer.append(&mut self.service_type.as_bytes().to_vec());
+        buffer.push(0x00); // Terminate C-Octet-String
+        buffer.push(self.source_addr_ton);
+        buffer.push(self.source_addr_npi);
+        buffer.append(&mut self.source_addr.as_bytes().to_vec());
+        buffer.push(0x00); // Terminate C-Octet-String
+        buffer.push(self.dest_addr_ton);
+        buffer.push(self.dest_addr_npi);
+        buffer.append(&mut self.destination_addr.as_bytes().to_vec());
+        buffer.push(0x00); // Terminate C-Octet-String
+        buffer.push(self.esm_class);
+        buffer.push(self.protocol_id);
+        buffer.push(self.priority_flag);
+        buffer.append(&mut self.schedule_delivery_time.as_bytes().to_vec());
+        buffer.push(0x00); // Terminate C-Octet-String
+        buffer.append(&mut self.validity_period.as_bytes().to_vec());
+        buffer.push(0x00); // Terminate C-Octet-String
+        buffer.push(self.registered_delivery);
+        buffer.push(self.replace_if_present_flag);
+        buffer.push(self.data_coding);
+        buffer.push(self.sm_default_msg_id);
+        buffer.push(self.sm_length);
+        if self.sm_length > 0 {
+            buffer.append(&mut self.short_message.as_bytes().to_vec());
+        }
+        
+        if let Some(user_message_reference) = self.user_message_reference {
+            let user_message_reference = user_message_reference.to_be_bytes();
+            for byte in user_message_reference {
+                buffer.push(byte);
+            }
+        }
+        buffer.push(0x00); // Terminate C-Octet-String
+        buffer
     }
 
     pub fn accept(self, message_id: String) -> submit_sm_resp {
