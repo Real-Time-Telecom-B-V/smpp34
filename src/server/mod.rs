@@ -24,6 +24,7 @@ pub struct SmppServer {
 
 
 pub struct ESME {
+    pub server_address: SocketAddr,
     pub client_address: SocketAddr,
     pub session_id: String,
     pub system_id: String,
@@ -45,6 +46,7 @@ impl ESME {
         if self.can_receive {
             let sequence_number = self.next_sequence_number();
             let deliver_sm = deliver_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, protocol_id, priority_flag, schedule_delivery_time, validity_period, registered_delivery, replace_if_present_flag, data_coding, sm_default_msg_id, short_message);
+            info!("[{} on server {}] sending deliver_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
             self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: deliver_sm.encode() }).await.expect("Unable to send deliver_sm request to writer thread");
             sequence_number
         } else {
@@ -55,6 +57,7 @@ impl ESME {
     pub async fn send_unbind(&self) -> u32 {
         let sequence_number = self.next_sequence_number();
         let unbind = unbind::with_sequence_number(sequence_number.clone());
+        info!("[{} on server {}] sending unbind with sequence_number {}", self.client_address, self.server_address, sequence_number);
         self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode() }).await.expect("Unable to send unbind request to writer thread");
         sequence_number
     }
@@ -62,6 +65,7 @@ impl ESME {
     pub async fn send_data_sm(&self, service_type: String, source_addr_ton: u8,  source_addr_npi: u8, source_addr: String,  dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) -> u32 {
         let sequence_number = self.next_sequence_number();
         let data_sm = data_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, registered_delivery, data_coding);
+        info!("[{} on server {}] sending data_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
         self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode() }).await.expect("Unable to send data_sm request to writer thread");
         sequence_number
     }
@@ -70,6 +74,7 @@ impl ESME {
         if self.can_receive {
             let sequence_number = self.next_sequence_number();
             let alert_notification = alert_notification::new(sequence_number.clone(), source_addr_ton, source_addr_npi, source_addr, esme_addr_ton, esme_addr_npi, esme_addr, ms_availability_status);
+            info!("[{} on server {}] sending alert_notification with sequence_number {}", self.client_address, self.server_address, sequence_number);
             self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: alert_notification.encode() }).await.expect("Unable to send alert_notification request to writer thread");
             sequence_number
         } else {
@@ -264,7 +269,7 @@ impl SmppServer {
 impl Drop for SmppServer {
     fn drop(&mut self) {
         if self.alive.load(Ordering::SeqCst) {
-            self.stop();
+            futures::executor::block_on(self.stop());
         }
     }
 }

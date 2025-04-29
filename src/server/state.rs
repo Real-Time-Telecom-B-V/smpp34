@@ -104,7 +104,8 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
     let mut last_read = Instant::now(); 
 
     listener.on_esme_bound(ESME {
-        client_address: connection_information.client_address.clone(), 
+        client_address: connection_information.client_address.clone(),
+        server_address: connection_information.server_address.clone(),
         system_id: system_id.clone(),
         session_id: session_id.clone(),
         can_receive: bound_type == BOUND_TYPE::BOUND_RX || bound_type == BOUND_TYPE::BOUND_TRX, 
@@ -135,6 +136,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                 if header.command_id == CommandId::submit_sm as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX)  {
                                     match submit_sm::decode(header, &pdu) {
                                         Ok(submit_sm) => {
+                                            info!("[{} on server {}] received submit_sm with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                             let handler = listener.clone();
                                             let connection_information = connection_information.clone();
                                             let submit_sm_session_id = session_id.clone();
@@ -150,6 +152,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                 } else if header.command_id == CommandId::cancel_sm as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX)  {
                                     match cancel_sm::decode(header, &pdu) {
                                         Ok(cancel_sm) => {
+                                            info!("[{} on server {}] received cancel_sm with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                             let handler = listener.clone();
                                             let connection_information = connection_information.clone();
                                             let cancel_sm_session_id = session_id.clone();
@@ -206,6 +209,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
 
                                     match unbind::decode(header, &pdu) {
                                         Ok(unbind) => {
+                                            info!("[{} on server {}] received unbind with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                             let unbind_resp = listener.on_unbind(unbind.clone(), &connection_information, &session_id).await;
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: unbind_resp.encode() }).await.expect("Can not send to writer thread");
                                         },
@@ -232,6 +236,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                         } else {
                                             match deliver_sm_resp::decode(header, &pdu) {
                                                 Ok(deliver_sm_resp) => {
+                                                    info!("[{} on server {}] received deliver_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                                     let handler = listener.clone();
                                                     let connection_information = connection_information.clone();
                                                     let submit_sm_session_id = session_id.clone();
@@ -261,6 +266,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                         } else {
                                             match data_sm_resp::decode(header, &pdu) {
                                                 Ok(data_sm_resp) => {
+                                                    info!("[{} on server {}] received data_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                                     let handler = listener.clone();
                                                     let connection_information = connection_information.clone();
                                                     let submit_sm_session_id = session_id.clone();

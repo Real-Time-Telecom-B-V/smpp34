@@ -1,52 +1,75 @@
 
-use std::sync::Mutex;
 
+use async_trait::async_trait;
 use log::info;
-use smpp34::{alert_notification, client::SMSC, data_sm_resp, deliver_sm, deliver_sm_resp, submit_sm, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation};
+use smpp34::{alert_notification, client::{SmppClientListener, SMSC}, data_sm_resp, deliver_sm, deliver_sm_resp, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation};
+use tokio::sync::Mutex;
 
-static SMSCS: Mutex<Vec<SMSC>> = Mutex::new(Vec::new());
 
-pub fn on_unbind(request: unbind, _connection_information: &SmppConnectionInformation, _session_id: &String) -> unbind_resp {
-    request.accept()
+struct TestSmppClientListener {
+    pub smscs: Mutex<Vec<SMSC>>,
 }
 
-pub fn on_unbind_resp(_response: unbind_resp, _connection_information: &SmppConnectionInformation, _session_id: &String) {
+impl TestSmppClientListener {
+    pub fn new() -> Self {
+        TestSmppClientListener{
+            smscs: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub async fn unbind(&self) {
+        let smscs = self.smscs.lock().await;
+        if let Some(smsc) = smscs.get(0) {
+            smsc.send_unbind().await;
+        }
+    }
+}
+
+#[async_trait]
+impl SmppClientListener for TestSmppClientListener {
+
+    async fn on_unbind(&self, request: unbind, _connection_information: &SmppConnectionInformation, _session_id: &String) -> unbind_resp {
+        request.accept()
+    }
     
-}
-pub fn on_submit_sm(request: submit_sm, _connection_information: &SmppConnectionInformation, _session_id: &String) -> submit_sm_resp {
-    request.accept("1234".to_string())
-}
+    async fn on_unbind_resp(&self, _response: unbind_resp, _connection_information: &SmppConnectionInformation, _session_id: &String) {
+        
+    }
+        
+    async fn on_submit_sm_resp(&self, _response: submit_sm_resp, _connection_information: &SmppConnectionInformation, _session_id: &String){
+        
+    }
+    async fn on_data_sm_resp(&self, _response: data_sm_resp, _connection_information: &SmppConnectionInformation, _session_id: &String){
+        
+    }
     
-pub fn on_submit_sm_resp(_response: submit_sm_resp, _connection_information: &SmppConnectionInformation, _session_id: &String){
+    async fn on_deliver_sm(&self, request: deliver_sm, _connection_information: &SmppConnectionInformation, _session_id: &String) -> deliver_sm_resp {
+        request.accept()
+    }
+
+    async fn on_alert_notification(&self, _request: alert_notification, _connection_information: &SmppConnectionInformation, _session_id: &String) {
+        
+    }
     
-}
-pub fn on_data_sm_resp(_response: data_sm_resp, _connection_information: &SmppConnectionInformation, _session_id: &String){
+    async fn on_timeout(&self, _sequence_number: u32, _session_id: &String) {
+    }
     
+    async fn on_smsc_bound(&self, smsc: SMSC, _session_id: &String) {
+        info!("SMSC bound for session {} with system_id {} and address {}", _session_id, smsc.system_id, smsc.server_address);
+        self.smscs.lock().await.push(smsc);
+    }
+    
+    async fn on_smsc_unbound(&self, _session_id: &String) {
+        info!("SMSC for session {} unbound!", _session_id);
+        self.smscs.lock().await.retain(|smsc| smsc.session_id != *_session_id);
+    }
 }
 
-pub fn on_deliver_sm(request: deliver_sm, _connection_information: &SmppConnectionInformation, _session_id: &String) -> deliver_sm_resp {
-    request.accept()
-}
-pub fn on_alert_notification(_request: alert_notification, _connection_information: &SmppConnectionInformation, _session_id: &String) {
-    
-}
 
-pub fn on_timeout(_sequence_number: u32, _session_id: &String) {
-}
-
-pub fn on_smsc_bound(smsc: SMSC, _session_id: &String) {
-    info!("SMSC bound for session {} with system_id {} and address {}", _session_id, smsc.system_id, smsc.server_address);
-    SMSCS.lock().unwrap().push(smsc);
-}
-
-pub fn on_smsc_unbound(_session_id: &String) {
-    info!("SMSC for session {} unbound!", _session_id);
-    SMSCS.lock().unwrap().retain(|smsc| smsc.session_id != *_session_id);
-}
 
 mod tests {
     use std::{sync::Arc, thread, time::Duration};
-    use smpp34::client::{SmppClientListener, SmppClient, BIND_TYPE};
+    use smpp34::client::{SmppClient, BIND_TYPE};
 
     use crate::*;
 
@@ -54,17 +77,8 @@ mod tests {
 
     #[test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
     async fn test_server_bind() {
-        let listener = SmppClientListener {
-            on_unbind,
-            on_unbind_resp,
-            on_submit_sm_resp,
-            on_data_sm_resp,
-            on_deliver_sm,
-            on_alert_notification,
-            on_timeout,
-            on_smsc_bound,
-            on_smsc_unbound,
-        };
+
+        let listener = Arc::new(TestSmppClientListener::new());
     
         let mut client = SmppClient::new("127.0.0.1".to_owned() ,2775, false,
             BIND_TYPE::TRX, 
@@ -74,16 +88,14 @@ mod tests {
             1, 
             1, 
             "".to_owned(), 
-            Arc::new(listener), 
+            listener.clone(), 
             20
         );
         client.start();
 
         thread::sleep(Duration::from_millis(10000));
 
-        SMSCS.lock().unwrap().get(0).map(|smsc| {
-            smsc.send_unbind();
-        });
+        listener.unbind().await;
         
         client.stop();
 

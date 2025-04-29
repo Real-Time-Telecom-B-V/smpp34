@@ -104,9 +104,11 @@ mod tests {
 
     #[test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
     async fn test_multi_pdu_frame() {
-        let listener = TestSmppServerListener::new();
-        let mut server = SmppServer::new(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2775, Arc::new(listener));
-        server.start();
+        let listener = Arc::new(TestSmppServerListener::new());
+        let mut server = SmppServer::new(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2775, listener);
+        server.start().await;
+
+        
     }
 }
 
