@@ -118,6 +118,10 @@ impl SmppServer {
         SmppServer { address, port, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size }
     } 
 
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+
     pub async fn start(&mut self) {
 
         if self.alive.load(Ordering::SeqCst) {
