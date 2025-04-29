@@ -190,9 +190,13 @@ impl SmppClient {
 
     pub fn new_with_default_timers(server_address: String, server_port: u16, tls: bool, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<dyn SmppClientListener + Send + Sync + 'static>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, window_size: usize) -> SmppClient {
         SmppClient { server_address, server_port, tls, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size, window_size }
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
     } 
 
-    pub fn start(&mut self) {
+    pub async fn start(&mut self) {
 
         if self.alive.load(Ordering::SeqCst) {
             panic!("Can not start client twice")
@@ -609,9 +613,9 @@ impl SmppClient {
         }));
     }
 
-    pub fn stop(&mut self) {
+    pub async fn stop(&mut self) {
 
-        // TODO send unbind!!
+        // We except the user of this code to send unbind before stopping the client
         info!("Stopping smpp client");
         self.alive.store(false, Ordering::SeqCst);
         self.handle
@@ -625,7 +629,7 @@ impl SmppClient {
 impl Drop for SmppClient {
     fn drop(&mut self) {
         if self.alive.load(Ordering::SeqCst) {
-            self.stop();
+            futures::executor::block_on(self.stop());
         }
     }
 }
