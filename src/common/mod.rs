@@ -4,6 +4,8 @@ use std::net::SocketAddr;
 
 use chrono::DateTime;
 use chrono::Utc;
+use downcast_rs::impl_downcast;
+use downcast_rs::DowncastSync;
 use log::error;
 // Re-exports
 pub use commands::bind_transmitter::*;
@@ -26,6 +28,7 @@ use nom::{
     bytes::complete::{take, take_until},
     IResult,
 };
+use tokio::sync::oneshot;
 
 /// The general format of an SMPP PDU consists of a PDU header followed by a PDU body
 /// 
@@ -357,10 +360,16 @@ pub struct SmppConnectionInformation {
     pub client_address: SocketAddr,
 }
 
+pub trait SmppReply : DowncastSync {} 
+
+impl_downcast!(sync SmppReply); 
+
 pub (crate) struct WriteFrame {
     /// If a sequence number is set it's a request, so we expect a response, if not it's a response from our end
     pub(crate) our_sequence_number: Option<u32>,
 
     /// The actual PDU to send on the TCP connection
-    pub(crate) pdu: Vec<u8>
+    pub(crate) pdu: Vec<u8>,
+
+    pub(crate) oneshot: Option<tokio::sync::oneshot::Sender<Box<dyn SmppReply + Send + Sync + 'static>>>,
 }

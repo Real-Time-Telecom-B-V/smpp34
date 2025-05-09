@@ -1,6 +1,6 @@
 use log::warn;
 use num_traits::FromPrimitive;
-use crate::{CommandHeader, common::{parse_c_octet_string, parse_next_int, parse_octet_string}, SmppError, CommandId};
+use crate::{common::{parse_c_octet_string, parse_next_int, parse_octet_string}, CommandHeader, CommandId, SmppError, SmppReply};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct submit_sm  {
@@ -125,6 +125,16 @@ impl submit_sm {
     }
 
     pub fn encode(self) -> Vec<u8> {
+
+
+        assert!(self.source_addr.len() <= 21, "source_addr can only be a maximum of 21 characters");
+        assert!(self.destination_addr.len() <= 21, "destination_addr can only be a maximum of 21 characters");
+        assert!(self.schedule_delivery_time.len() <= 17, "schedule_delivery_time can only be a maximum of 17 characters");
+        assert!(self.validity_period.len() <= 17, "validity_period can only be a maximum of 17 characters");
+        assert!(self.short_message.len() <= 254, "short_message can only be a maximum of 254 characters");
+        assert!(self.service_type.len() <= 6, "service_type can only be a maximum of 6 characters");
+        assert!(self.sm_length as usize == self.short_message.len(), "sm_length must be equal to the length of short_message");
+
         let mut buffer:Vec<u8> = Vec::with_capacity(self.header.command_length.try_into().unwrap());
         buffer.append(&mut self.header.encode());
         buffer.append(&mut self.service_type.as_bytes().to_vec());
@@ -197,8 +207,8 @@ impl submit_sm {
 
 #[derive(Debug, Clone)]
 pub struct submit_sm_resp {
-    header: CommandHeader,
-    message_id: Option<String>
+    pub header: CommandHeader,
+    pub message_id: Option<String>
 }
 
 impl submit_sm_resp {
@@ -223,4 +233,7 @@ impl submit_sm_resp {
         let message_id = parse_c_octet_string(pdu[16..].to_vec(), 65)?;
         Ok(submit_sm_resp { header, message_id: Some(message_id) })
      }
+}
+
+impl SmppReply for submit_sm_resp {
 }

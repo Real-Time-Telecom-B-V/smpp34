@@ -75,7 +75,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
             let sequence_number = enquire_link_sequence_number.fetch_add(1, Ordering::SeqCst);
             info!("[{} on server {}] sending enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, sequence_number);
 
-            enquire_link_writer_tx.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: enquire_link::new(sequence_number).encode() }).await.expect("Can not send to writer thread");
+            enquire_link_writer_tx.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: enquire_link::new(sequence_number).encode(), oneshot: None }).await.expect("Can not send to writer thread");
 
             match enquire_link_rx.recv().await {
                 Some(sequence) => {
@@ -141,12 +141,12 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             let connection_information = connection_information.clone();
                                             let submit_sm_session_id = session_id.clone();
                                             let submit_sm_resp = handler.on_submit_sm(submit_sm.clone(), &connection_information, &submit_sm_session_id).await;
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: submit_sm_resp.encode() }).await.expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: submit_sm_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
                                     }
                                 } else if header.command_id == CommandId::cancel_sm as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX)  {
@@ -158,12 +158,12 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             let cancel_sm_session_id = session_id.clone();
 
                                             let cancel_sm_resp = handler.on_cancel_sm(cancel_sm.clone(), &connection_information, &cancel_sm_session_id).await;
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: cancel_sm_resp.encode() }).await.expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: cancel_sm_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
                                     }
                                 } else if header.command_id == CommandId::enquire_link as u32 {
@@ -172,12 +172,12 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             info!("[{} on server {}] received enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                             let enquire_link_resp = enquire_link.accept();
                                             info!("[{} on server {}] sending enquire_link_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: enquire_link_resp.encode() }).await.expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: enquire_link_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode enquire_link", connection_information.client_address, connection_information.server_address);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
                                     }
                                 } else if header.command_id == CommandId::enquire_link_resp as u32 {
@@ -211,12 +211,12 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                         Ok(unbind) => {
                                             info!("[{} on server {}] received unbind with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                             let unbind_resp = listener.on_unbind(unbind.clone(), &connection_information, &session_id).await;
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: unbind_resp.encode() }).await.expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: unbind_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode unbind", connection_information.client_address, connection_information.server_address);
                                             let error = unbind::generic_reject(potential_seq_no, error).encode();
-                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
                                     }
 
@@ -245,7 +245,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                                 Err(error) => {
                                                     error!("[{} on server {}] unable to decode deliver_sm_resp", connection_information.client_address, connection_information.server_address);
                                                     let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                                    tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
+                                                    tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                                 }
                                             }
                                         }
@@ -275,7 +275,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                                 Err(error) => {
                                                     error!("[{} on server {}] unable to decode data_sm_resp", connection_information.client_address, connection_information.server_address);
                                                     let error = submit_sm::generic_reject(potential_seq_no, error).encode();
-                                                    tx.send(WriteFrame { our_sequence_number: None, pdu: error }).await.expect("Can not send to writer thread");
+                                                    tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                                 }
                                             }
                                         }
@@ -286,13 +286,13 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                 } else {
                                     error!("[{} on server {}] Did not expect command_id {} for this bind, sending ESME_RINVBNDSTS in generick_nack", connection_information.client_address, connection_information.server_address, header.command_id);
                                     let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVBNDSTS as u32, sequence_number: potential_seq_no };
-                                    tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).await.expect("Can not send to writer thread");
+                                    tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                 }
                             },
                             Err(error) => {
                                 error!("[{} on server {}] Unable to decode command_header for PDU, sending {:?} in generic_nack", connection_information.client_address, connection_information.server_address, error); 
                                 let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
-                                tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode() }).await.expect("Can not send to writer thread");
+                                tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode(), oneshot: None }).await.expect("Can not send to writer thread");
 
                                 enquire_link_ticker.abort(); // When the TCP stream is closed stop enquiring the link
                             } 

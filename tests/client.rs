@@ -91,7 +91,7 @@ mod tests {
             listener.clone(), 
             20
         );
-        client.start();
+        client.start().await;
 
         thread::sleep(Duration::from_millis(10000));
 
