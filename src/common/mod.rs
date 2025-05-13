@@ -28,7 +28,6 @@ use nom::{
     bytes::complete::{take, take_until},
     IResult,
 };
-use tokio::sync::oneshot;
 
 /// The general format of an SMPP PDU consists of a PDU header followed by a PDU body
 /// 

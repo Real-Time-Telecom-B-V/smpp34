@@ -1,6 +1,6 @@
 use num_traits::FromPrimitive;
 
-use crate::{CommandHeader, SmppError, CommandId};
+use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 
 /// 
 /// The purpose of the SMPP unbind operation is to deregister an instance of an ESME from the
@@ -111,6 +111,8 @@ pub struct unbind_resp {
     header: CommandHeader,
 
 }
+
+impl SmppReply for unbind_resp {}
 
 impl unbind_resp {
 

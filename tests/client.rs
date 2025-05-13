@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use log::info;
-use smpp34::{alert_notification, client::{SmppClientListener, SMSC}, data_sm_resp, deliver_sm, deliver_sm_resp, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation};
+use smpp34::{alert_notification, client::{SmppClientListener, SMSC}, deliver_sm, deliver_sm_resp, unbind, unbind_resp, SmppConnectionInformation};
 use tokio::sync::Mutex;
 
 
@@ -20,7 +20,15 @@ impl TestSmppClientListener {
     pub async fn unbind(&self) {
         let smscs = self.smscs.lock().await;
         if let Some(smsc) = smscs.get(0) {
-            smsc.send_unbind().await;
+            let result = smsc.send_unbind().await;
+            match result {
+                Ok(_) => {
+                    info!("Unbound session {}", smsc.session_id);
+                }
+                Err(e) => {
+                    info!("Error unbinding session {}: {:?}", smsc.session_id, e);
+                }
+            }
         }
     }
 }
@@ -30,17 +38,6 @@ impl SmppClientListener for TestSmppClientListener {
 
     async fn on_unbind(&self, request: unbind, _connection_information: &SmppConnectionInformation, _session_id: &String) -> unbind_resp {
         request.accept()
-    }
-    
-    async fn on_unbind_resp(&self, _response: unbind_resp, _connection_information: &SmppConnectionInformation, _session_id: &String) {
-        
-    }
-        
-    async fn on_submit_sm_resp(&self, _response: submit_sm_resp, _connection_information: &SmppConnectionInformation, _session_id: &String){
-        
-    }
-    async fn on_data_sm_resp(&self, _response: data_sm_resp, _connection_information: &SmppConnectionInformation, _session_id: &String){
-        
     }
     
     async fn on_deliver_sm(&self, request: deliver_sm, _connection_information: &SmppConnectionInformation, _session_id: &String) -> deliver_sm_resp {
@@ -97,7 +94,7 @@ mod tests {
 
         listener.unbind().await;
         
-        client.stop();
+        client.stop().await;
 
     }
 }

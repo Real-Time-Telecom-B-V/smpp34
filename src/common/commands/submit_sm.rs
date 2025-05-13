@@ -235,5 +235,4 @@ impl submit_sm_resp {
      }
 }
 
-impl SmppReply for submit_sm_resp {
-}
+impl SmppReply for submit_sm_resp {}

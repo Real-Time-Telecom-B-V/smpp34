@@ -4,7 +4,7 @@ use nom::{
 };
 use num_traits::FromPrimitive;
 
-use crate::{common::parse_c_octet_string_nom, CommandHeader, CommandId, SmppError};
+use crate::{common::parse_c_octet_string_nom, CommandHeader, CommandId, SmppError, SmppReply};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct cancel_sm {
@@ -19,11 +19,12 @@ pub struct cancel_sm {
     destination_addr: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct cancel_sm_resp {
     header: CommandHeader
 }
 
-
+impl SmppReply for cancel_sm_resp {}
 
 // Function to parse cancel_sm PDU
 fn parse_cancel_sm(header: CommandHeader, pdu: &[u8]) -> IResult<&[u8], cancel_sm> {
