@@ -286,7 +286,6 @@ impl SmppClient {
         }
 
         info!("Starting smpp client for server {} with window size: {}", self.server_address, self.window_size);
-        self.alive.store(true, Ordering::SeqCst);
 
         let server_socket_address = self.server_address.clone();
         let server_socker_port = self.server_port.clone();
@@ -327,6 +326,7 @@ impl SmppClient {
 
                 StreamWrapper::new_tcp(stream).unwrap()
             };
+            
 
             // TODO set connection timeout!
             info!("smpp client connected to server {}, sending bind PDU", server_socket_address);
@@ -376,6 +376,8 @@ impl SmppClient {
                             ) {
                                 let session_id = Uuid::new_v4().to_string();
                                 info!("Successfuly bound in {} mode", bind_type);
+
+                                alive.store(true, Ordering::SeqCst);
 
                                 let (mut reader, writer) = stream.split().await;
                                 let writer = Arc::new(Mutex::new(writer));
