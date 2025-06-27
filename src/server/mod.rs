@@ -1,8 +1,8 @@
 
-use std::{net::{IpAddr, SocketAddr}, sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc}};
+use std::{net::{IpAddr, SocketAddr}, sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc}, time::Duration};
 use async_trait::async_trait;
 use log::{info, error};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener, sync::mpsc::Sender, task::{self, JoinHandle}, time::timeout};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener, sync::{mpsc::Sender, oneshot}, task::{self, JoinHandle}, time::timeout};
 use uuid::Uuid;
 
 use crate::{alert_notification, bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, cancel_sm_resp, common::{CommandHeader, CommandId, SmppError}, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, generic_nack, server::state::OPEN, submit_sm, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation, WriteFrame};
@@ -39,35 +39,90 @@ impl ESME {
         self.sequence_number.fetch_add(1, Ordering::SeqCst)
     }
 
-    pub async fn send_deliver_sm(&self, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, 
-        dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, 
-        schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, 
-        data_coding: u8, sm_default_msg_id: u8, short_message: String) -> u32 {
+    pub async fn send_deliver_sm(&self, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8,  schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: String) -> Result<deliver_sm_resp, SmppError> {
         if self.can_receive {
             let sequence_number = self.next_sequence_number();
             let deliver_sm = deliver_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, protocol_id, priority_flag, schedule_delivery_time, validity_period, registered_delivery, replace_if_present_flag, data_coding, sm_default_msg_id, short_message);
             info!("[{} on server {}] sending deliver_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
-            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: deliver_sm.encode(), oneshot: None }).await.expect("Unable to send deliver_sm request to writer thread");
-            sequence_number
+
+            let (tx, rx) = oneshot::channel();
+
+            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: deliver_sm.encode(), oneshot: Some(tx) }).await.expect("Unable to send deliver_sm request to writer thread");
+
+            let response = timeout(Duration::from_millis(2000), rx).await;
+
+            match response {
+                Ok(Ok(response)) => {
+                    let deliver_sm_resp = response.as_any().downcast_ref::<deliver_sm_resp>().expect("Unable to downcast deliver_sm_resp");
+                    info!("[{} on server {}] received deliver_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                    Ok(deliver_sm_resp.clone())
+                },
+                Ok(Err(_)) => {
+                    error!("[{} on server {}] unable to receive deliver_sm_resp", self.client_address, self.server_address);
+                    Err(SmppError::ESME_RSYSERR)
+                },
+                Err(_) => {
+                    error!("[{} on server {}] deliver_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                    Err(SmppError::ESME_RSYSERR)
+                }
+            }
         } else {
             panic!("Can not send deliver_sm on non RX/TRX bind");
         }
     }
 
-    pub async fn send_unbind(&self) -> u32 {
+    pub async fn send_unbind(&self) -> Result<unbind_resp, SmppError> {
         let sequence_number = self.next_sequence_number();
         let unbind = unbind::with_sequence_number(sequence_number.clone());
         info!("[{} on server {}] sending unbind with sequence_number {}", self.client_address, self.server_address, sequence_number);
-        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode(), oneshot: None }).await.expect("Unable to send unbind request to writer thread");
-        sequence_number
+
+        let (tx, rx) = oneshot::channel();
+
+        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode(), oneshot: Some(tx) }).await.expect("Unable to send unbind request to writer thread");
+
+        let response = timeout(Duration::from_millis(2000), rx).await;
+        match response {
+            Ok(Ok(response)) => {
+                let unbind_resp = response.as_any().downcast_ref::<unbind_resp>().expect("Unable to downcast unbind_resp");
+                info!("[{} on server {}] received unbind_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                Ok(unbind_resp.clone())
+            },
+            Ok(Err(_)) => {
+                error!("[{} on server {}] unable to receive unbind_resp", self.client_address, self.server_address);
+                Err(SmppError::ESME_RSYSERR)
+            },
+            Err(_) => {
+                error!("[{} on server {}] unbind_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                Err(SmppError::ESME_RSYSERR)
+            }
+        }
     }
 
-    pub async fn send_data_sm(&self, service_type: String, source_addr_ton: u8,  source_addr_npi: u8, source_addr: String,  dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) -> u32 {
+    pub async fn send_data_sm(&self, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) -> Result<data_sm_resp, SmppError> {
         let sequence_number = self.next_sequence_number();
         let data_sm = data_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, registered_delivery, data_coding);
         info!("[{} on server {}] sending data_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
-        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: None }).await.expect("Unable to send data_sm request to writer thread");
-        sequence_number
+
+        let (tx, rx) = oneshot::channel();
+
+        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: Some(tx) }).await.expect("Unable to send data_sm request to writer thread");
+
+        let response = timeout(Duration::from_millis(2000), rx).await;
+        match response {
+            Ok(Ok(response)) => {
+                let data_sm_resp = response.as_any().downcast_ref::<data_sm_resp>().expect("Unable to downcast data_sm_resp");
+                info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                Ok(data_sm_resp.clone())
+            },
+            Ok(Err(_)) => {
+                error!("[{} on server {}] unable to receive data_sm_resp", self.client_address, self.server_address);
+                Err(SmppError::ESME_RSYSERR)
+            },
+            Err(_) => {
+                error!("[{} on server {}] data_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                Err(SmppError::ESME_RSYSERR)
+            }
+        }
     }
 
     pub async fn send_alert_notification(&self, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, esme_addr_ton: u8, esme_addr_npi: u8, esme_addr: String, ms_availability_status: Option<u8>) -> u32 {
@@ -75,6 +130,8 @@ impl ESME {
             let sequence_number = self.next_sequence_number();
             let alert_notification = alert_notification::new(sequence_number.clone(), source_addr_ton, source_addr_npi, source_addr, esme_addr_ton, esme_addr_npi, esme_addr, ms_availability_status);
             info!("[{} on server {}] sending alert_notification with sequence_number {}", self.client_address, self.server_address, sequence_number);
+
+            // No one-shot as this is a notification and we do not expect a response
             self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: alert_notification.encode(), oneshot: None }).await.expect("Unable to send alert_notification request to writer thread");
             sequence_number
         } else {
