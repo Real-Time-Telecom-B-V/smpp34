@@ -54,6 +54,7 @@ pub struct SMSC {
     can_send: bool,
     tx_channel: Sender<WriteFrame>,
     sequence_number: Arc<AtomicU32>,
+    response_timer: u64,
 }
 
 impl SMSC {
@@ -71,8 +72,8 @@ impl SMSC {
             let (tx, rx) = oneshot::channel();
 
             self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: submit_sm.encode(), oneshot: Some(tx) } ).await.expect("Unable to send deliver_sm request to writer thread");
-            
-            let response = timeout(Duration::from_millis(2000), rx).await;
+
+            let response = timeout(Duration::from_millis(self.response_timer), rx).await;
 
             match response {
                 Ok(Ok(response)) => {
@@ -104,7 +105,7 @@ impl SMSC {
 
         self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode(), oneshot: Some(tx) }).await.expect("Unable to send unbind request to writer thread");
 
-        let response = timeout(Duration::from_millis(2000), rx).await;
+        let response = timeout(Duration::from_millis(self.response_timer), rx).await;
         match response {
             Ok(Ok(response)) => {
                 let unbind_resp = response.as_any().downcast_ref::<unbind_resp>().expect("Unable to downcast unbind_resp");
@@ -132,7 +133,7 @@ impl SMSC {
 
             self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: Some(tx) }).await.expect("Unable to send data_sm request to writer thread");
 
-            let response = timeout(Duration::from_millis(2000), rx).await;
+            let response = timeout(Duration::from_millis(self.response_timer), rx).await;
 
             match response {
                 Ok(Ok(response)) => {
@@ -164,7 +165,7 @@ impl SMSC {
 
             self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: cancel_sm.encode(), oneshot: Some(tx) }).await.expect("Unable to send cancel_sm request to writer thread");
 
-            let response = timeout(Duration::from_millis(2000), rx).await;
+            let response = timeout(Duration::from_millis(self.response_timer), rx).await;
 
             match response {
                 Ok(Ok(response)) => {
@@ -431,16 +432,23 @@ impl SmppClient {
 
                                         enquire_link_writer_tx.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: enquire_link::new(sequence_number).encode(), oneshot: None }).await.expect("Can not send to writer thread");
 
-                                        match enquire_link_rx.recv().await {
-                                            Some(sequence) => {
+                                        let response = timeout(response_timer, enquire_link_rx.recv()).await;
+
+                                        match response {
+                                            Ok(Some(sequence)) => {
                                                 // We want the sequence number to match, otherwise we must kill this bind
                                                 if sequence != sequence_number { 
                                                     error!("[{} on server {}] enquire_link_resp with sequence_number {} did not match sequence_number {}", connection_information.client_address, connection_information.server_address, sequence, sequence_number);
                                                     enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
                                                     break;
                                                 } 
-                                        },
-                                            None => {
+                                            },
+                                            Ok(None) => {
+                                                error!("[{} on server {}] enquire_link with sequence_number {} channel closed", connection_information.client_address, connection_information.server_address, sequence_number);
+                                                enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
+                                                break;
+                                            },
+                                            Err(_) => {
                                                 error!("[{} on server {}] enquire_link with sequence_number {} no response within {}ms", connection_information.client_address, connection_information.server_address, sequence_number, response_timer.as_millis());
                                                 enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
                                                 break;
@@ -460,7 +468,8 @@ impl SmppClient {
                                     server_address: connection_information.server_address.clone(),
                                     client_address: connection_information.client_address.clone(),
                                     session_id: session_id.clone(),
-                                    system_id: system_id.clone(), }, &session_id 
+                                    system_id: system_id.clone(),
+                                    response_timer: response_timer.clone() }, &session_id
                                 ).await;
 
                                 // Main read loop
