@@ -308,7 +308,7 @@ fn parse_c_octet_string_nom(input: &[u8]) -> IResult<&[u8], String> {
     Ok((input, String::from_utf8_lossy(result).to_string()))
 }
 
-fn parse_octet_string(bytes: Vec<u8>, supposed_length: usize, maximum_length: usize) -> Result<String, SmppError> {
+fn parse_octet_string_as_vec(bytes: Vec<u8>, supposed_length: usize, maximum_length: usize) -> Result<Vec<u8>, SmppError> {
     if supposed_length > maximum_length {
         error!("Octet-String supposed length {} is over maximum allowed length {}", supposed_length, maximum_length);
         Err(SmppError::ESME_RINVPARLEN)
@@ -317,9 +317,10 @@ fn parse_octet_string(bytes: Vec<u8>, supposed_length: usize, maximum_length: us
         error!("Octet-String supposed length {} is too long for amount of remaining bytes {}", supposed_length, bytes.len());
         Err(SmppError::ESME_RINVPARLEN)
     } else {
-        String::from_utf8(bytes[0..supposed_length].to_vec()).map_err(|_x| SmppError::ESME_RINVPARLEN)
+        Ok(bytes[0..supposed_length].to_vec())
     }
 }
+
 
 fn decode_bind_request(header: CommandHeader, pdu: &Vec<u8>) -> Result<CommonBindRequestParameters, SmppError> {
     // CommondHeader decode method makes sure that PDU length matches the command_length so no need to check this again

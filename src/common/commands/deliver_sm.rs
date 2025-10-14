@@ -2,7 +2,7 @@
 use log::warn;
 use num_traits::FromPrimitive;
 
-use crate::{CommandHeader, common::{parse_c_octet_string, parse_next_int, parse_octet_string}, SmppError, CommandId};
+use crate::{common::{parse_c_octet_string, parse_next_int, parse_octet_string_as_vec}, CommandHeader, CommandId, SmppError};
 
 #[derive(Debug, Clone)]
 pub struct deliver_sm  {
@@ -29,14 +29,14 @@ pub struct deliver_sm  {
     pub data_coding: u8,
     pub sm_default_msg_id: u8,
     pub sm_length: u8,
-    pub short_message: String,
+    pub short_message: Vec<u8>,
     pub user_message_reference: Option<u16>,
 }
 
 impl deliver_sm {
 
     // TODO optional parameters
-    pub (crate) fn new(sequence_number: u32, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: String) -> deliver_sm {
+    pub fn new(sequence_number: u32, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: Vec<u8>) -> deliver_sm {
         
         assert!(short_message.len() <= 254, "Message can only be a maximum of 254 characters");
 
@@ -98,7 +98,7 @@ impl deliver_sm {
         let data_coding = parse_next_int(pdu, start + 3)?;
         let sm_default_msg_id = parse_next_int(pdu, start + 4)?;
         let sm_length = parse_next_int(pdu, start + 5)?;
-        let short_message = parse_octet_string(pdu[start + 6..].to_vec(), sm_length as usize, 254)?;
+        let short_message = parse_octet_string_as_vec(pdu[start + 6..].to_vec(), sm_length as usize, 254)?;
 
         
 
@@ -126,7 +126,7 @@ impl deliver_sm {
         })
     }
 
-    pub fn encode(self) -> Vec<u8> {
+    pub fn encode(mut self) -> Vec<u8> {
         let mut buffer: Vec<u8> = Vec::with_capacity(self.header.command_status as usize);
         buffer.append(&mut self.header.encode());
         buffer.append(&mut self.service_type.into_bytes());
@@ -151,7 +151,7 @@ impl deliver_sm {
         buffer.push(self.data_coding);
         buffer.push(self.sm_default_msg_id);
         buffer.push(self.sm_length);
-        buffer.append(&mut self.short_message.into_bytes());
+        buffer.append(&mut self.short_message);
 
         // TODO optional parameters
         buffer

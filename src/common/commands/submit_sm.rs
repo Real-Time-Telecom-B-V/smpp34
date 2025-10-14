@@ -1,6 +1,6 @@
 use log::warn;
 use num_traits::FromPrimitive;
-use crate::{common::{parse_c_octet_string, parse_next_int, parse_octet_string}, CommandHeader, CommandId, SmppError, SmppReply};
+use crate::{common::{parse_c_octet_string, parse_next_int, parse_octet_string_as_vec}, CommandHeader, CommandId, SmppError, SmppReply};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct submit_sm  {
@@ -27,14 +27,14 @@ pub struct submit_sm  {
     pub data_coding: u8,
     pub sm_default_msg_id: u8,
     pub sm_length: u8,
-    pub short_message: String,
+    pub short_message: Vec<u8>,
     pub user_message_reference: Option<u16>,
 }
 
 impl submit_sm {
 
     // TODO optional parameters
-    pub (crate) fn new(sequence_number: u32, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: String) -> submit_sm {
+    pub (crate) fn new(sequence_number: u32, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: Vec<u8>) -> submit_sm {
         
         assert!(short_message.len() <= 254, "Message can only be a maximum of 254 characters");
 
@@ -96,7 +96,7 @@ impl submit_sm {
         let data_coding = parse_next_int(pdu, start + 3)?;
         let sm_default_msg_id = parse_next_int(pdu, start + 4)?;
         let sm_length = parse_next_int(pdu, start + 5)?;
-        let short_message = parse_octet_string(pdu[start + 6..].to_vec(), sm_length as usize, 254)?;
+        let short_message = parse_octet_string_as_vec(pdu[start + 6..].to_vec(), sm_length as usize, 254)?;
 
         
 
@@ -124,7 +124,7 @@ impl submit_sm {
         })
     }
 
-    pub fn encode(self) -> Vec<u8> {
+    pub fn encode(mut self) -> Vec<u8> {
 
 
         assert!(self.source_addr.len() <= 21, "source_addr can only be a maximum of 21 characters");
@@ -160,7 +160,7 @@ impl submit_sm {
         buffer.push(self.sm_default_msg_id);
         buffer.push(self.sm_length);
         if self.sm_length > 0 {
-            buffer.append(&mut self.short_message.as_bytes().to_vec());
+            buffer.append(&mut self.short_message);
         }
         
         if let Some(user_message_reference) = self.user_message_reference {
