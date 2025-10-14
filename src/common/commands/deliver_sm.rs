@@ -2,7 +2,7 @@
 use log::warn;
 use num_traits::FromPrimitive;
 
-use crate::{common::{parse_c_octet_string, parse_next_int, parse_octet_string_as_vec}, CommandHeader, CommandId, SmppError};
+use crate::{common::{parse_c_octet_string, parse_next_int, parse_octet_string_as_vec}, CommandHeader, CommandId, SmppError, SmppReply};
 
 #[derive(Debug, Clone)]
 pub struct deliver_sm  {
@@ -212,3 +212,5 @@ impl deliver_sm_resp {
         Ok(deliver_sm_resp { header, message_id })
      }
 }
+
+impl SmppReply for deliver_sm_resp {}

@@ -68,14 +68,6 @@ impl SmppServerListener for TestSmppServerListener {
         request.accept()
     }
     
-    async fn on_deliver_sm_resp(&self, response: deliver_sm_resp, connection_information: &SmppConnectionInformation, _session_id: &String)  {
-        info!("[deliver_sm_resp@{}] <{}> {:?}", connection_information.server_address, connection_information.client_address, response);
-    }
-    
-    async fn on_data_sm_resp(&self, response: data_sm_resp, connection_information: &SmppConnectionInformation, _session_id: &String)  {
-        info!("[data_sm_resp@{}] <{}> {:?}", connection_information.server_address, connection_information.client_address, response);
-    }
-    
     async fn on_timeout(&self, sequence_number: u32, _session_id: &String) {
         info!("[timeout] sequence_number: {}", sequence_number);
     }

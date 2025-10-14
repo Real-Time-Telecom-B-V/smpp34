@@ -48,31 +48,32 @@ impl ESME {
 
             let (tx, rx) = oneshot::channel();
 
-            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: deliver_sm.encode(), oneshot: Some(tx) }).await {
-                Ok(_) => {},
+            let result = self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: deliver_sm.encode(), oneshot: Some(tx) }).await;
+
+            match result {
+                Ok(_) => {
+                    match timeout(Duration::from_millis(self.response_timer), rx).await {
+                        Ok(Ok(response)) => {
+                            let deliver_sm_resp = response.as_any().downcast_ref::<deliver_sm_resp>().expect("Unable to downcast deliver_sm_resp");
+                            info!("[{} on server {}] received deliver_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                            Ok(deliver_sm_resp.clone())
+                        },
+                        Ok(Err(e)) => {
+                            error!("[{} on server {}] unable to receive deliver_sm_resp: {}", self.client_address, self.server_address, e);
+                            Err(SmppError::ESME_RSYSERR)
+                        },
+                        Err(_) => {
+                            error!("[{} on server {}] deliver_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                            Err(SmppError::ESME_RSYSERR)
+                        }
+                    }
+                },
                 Err(e) => {
                     error!("[{} on server {}] unable to send deliver_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
                     return Err(SmppError::ESME_RSYSERR);
                 }
             }
 
-            let response = timeout(Duration::from_millis(self.response_timer), rx).await;
-
-            match response {
-                Ok(Ok(response)) => {
-                    let deliver_sm_resp = response.as_any().downcast_ref::<deliver_sm_resp>().expect("Unable to downcast deliver_sm_resp");
-                    info!("[{} on server {}] received deliver_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                    Ok(deliver_sm_resp.clone())
-                },
-                Ok(Err(e)) => {
-                    error!("[{} on server {}] unable to receive deliver_sm_resp: {}", self.client_address, self.server_address, e);
-                    Err(SmppError::ESME_RSYSERR)
-                },
-                Err(_) => {
-                    error!("[{} on server {}] deliver_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
-                    Err(SmppError::ESME_RSYSERR)
-                }
-            }
         } else {
             panic!("Can not send deliver_sm on non RX/TRX bind");
         }
@@ -119,29 +120,29 @@ impl ESME {
         let (tx, rx) = oneshot::channel();
 
         match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: Some(tx) }).await {
-            Ok(_) => {},
+            Ok(_) => {
+                match timeout(Duration::from_millis(self.response_timer), rx).await {
+                    Ok(Ok(response)) => {
+                        let data_sm_resp = response.as_any().downcast_ref::<data_sm_resp>().expect("Unable to downcast data_sm_resp");
+                        info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                        Ok(data_sm_resp.clone())
+                    },
+                    Ok(Err(e)) => {
+                        error!("[{} on server {}] unable to receive data_sm_resp: {}", self.client_address, self.server_address, e);
+                        Err(SmppError::ESME_RSYSERR)
+                    },
+                    Err(_) => {
+                        error!("[{} on server {}] data_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                        Err(SmppError::ESME_RSYSERR)
+                    }
+                }
+            },
             Err(e) => {
                 error!("[{} on server {}] unable to send data_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
                 return Err(SmppError::ESME_RSYSERR);
             }
         }
-
-        let response = timeout(Duration::from_millis(self.response_timer), rx).await;
-        match response {
-            Ok(Ok(response)) => {
-                let data_sm_resp = response.as_any().downcast_ref::<data_sm_resp>().expect("Unable to downcast data_sm_resp");
-                info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                Ok(data_sm_resp.clone())
-            },
-            Ok(Err(e)) => {
-                error!("[{} on server {}] unable to receive data_sm_resp: {}", self.client_address, self.server_address, e);
-                Err(SmppError::ESME_RSYSERR)
-            },
-            Err(_) => {
-                error!("[{} on server {}] data_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
-                Err(SmppError::ESME_RSYSERR)
-            }
-        }
+        
     }
 
     pub async fn send_alert_notification(&self, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, esme_addr_ton: u8, esme_addr_npi: u8, esme_addr: String, ms_availability_status: Option<u8>) -> u32 {
@@ -172,10 +173,6 @@ pub trait SmppServerListener {
     async fn on_unbind(&self, unbind: unbind, connection_information: &SmppConnectionInformation, session_id: &String) -> unbind_resp;
     async fn on_submit_sm(&self, submit_sm: submit_sm, connection_information: &SmppConnectionInformation, session_id: &String) ->  submit_sm_resp;
     async fn on_cancel_sm(&self, cancel_sm: cancel_sm, connection_information: &SmppConnectionInformation, session_id: &String) -> cancel_sm_resp;
-
-    async fn on_deliver_sm_resp(&self, deliver_sm_resp: deliver_sm_resp, connection_information: &SmppConnectionInformation, session_id: &String);
-    async fn on_data_sm_resp(&self, data_sm_resp: data_sm_resp, connection_information: &SmppConnectionInformation, session_id: &String);
-
     
     /// Notification sent when an SMPP command timed-out (respone_timer triggered)
     async fn on_timeout(&self, sequence_number: u32, session_id: &String);

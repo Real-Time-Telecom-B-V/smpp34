@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use log::{info, error};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::{mpsc::channel, Mutex}, time::{interval, timeout}};
 
-use crate::{bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, common::SmppError, data_sm_resp, deliver_sm_resp, enquire_link, server::ESME, submit_sm, unbind, CommandHeader, CommandId, SmppServerListener, WriteFrame};
+use crate::{bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, common::SmppError, data_sm_resp, deliver_sm_resp, enquire_link, server::ESME, submit_sm, unbind, CommandHeader, CommandId, SmppReply, SmppServerListener, WriteFrame};
 
 use crate::SmppConnectionInformation;
 
@@ -34,7 +34,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
 
     let (tx, mut rx) = channel::<WriteFrame>(100);
 
-    let pending_requests: Arc<Mutex<HashMap<u32, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
+    let pending_requests: Arc<Mutex<HashMap<u32, (SystemTime, Option<tokio::sync::oneshot::Sender<Box<dyn SmppReply + Send + Sync + 'static>>>)>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let writer_alive = alive.clone();
     let writer_stream = writer.clone();
@@ -46,7 +46,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                 match writer_stream.lock().await.write(&frame.pdu).await {
                     Ok(_) => { 
                         if frame.our_sequence_number.is_some() {
-                            writer_pending_requests.lock().await.insert(frame.our_sequence_number.unwrap(), SystemTime::now()); 
+                            writer_pending_requests.lock().await.insert(frame.our_sequence_number.unwrap(), (SystemTime::now(), frame.oneshot)); 
                         }
                     },
                     Err(e) => { error!("Unable to write to TCP stream {}", e) },
@@ -196,7 +196,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
 
                                     // Cleanup pending requests
                                     let mut guard = pending_requests.lock().await;
-                                    if let Some(time) = guard.remove(&header.sequence_number) {
+                                    if let Some((time, _)) = guard.remove(&header.sequence_number) {
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                         // Time-out detection
@@ -233,7 +233,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                     break; 
                                 } else if header.command_id == CommandId::deliver_sm_resp as u32 && (bound_type == BOUND_TYPE::BOUND_TX || bound_type == BOUND_TYPE::BOUND_TRX) {
                                     let mut guard = pending_requests.lock().await;
-                                    if let Some(time) = guard.remove(&header.sequence_number) {
+                                    if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                         // Time-out detection
@@ -245,10 +245,21 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             match deliver_sm_resp::decode(header, &pdu) {
                                                 Ok(deliver_sm_resp) => {
                                                     info!("[{} on server {}] received deliver_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                                    let handler = listener.clone();
                                                     let connection_information = connection_information.clone();
-                                                    let submit_sm_session_id = session_id.clone();
-                                                    handler.on_deliver_sm_resp(deliver_sm_resp.clone(), &connection_information, &submit_sm_session_id).await;
+
+                                                    // Send the response to the original sender
+                                                    if let Some(oneshot) = oneshot {
+                                                        match oneshot.send(Box::new(deliver_sm_resp.clone())) {
+                                                            Ok(_) => {
+                                                                info!("[{} on server {}] deliver_sm_resp sent to original sender", connection_information.client_address, connection_information.server_address);
+                                                            },
+                                                            Err(_) => {
+                                                                error!("[{} on server {}] unable to send deliver_sm_resp to original sender", connection_information.client_address, connection_information.server_address);
+                                                            }
+                                                        }
+                                                    } else {
+                                                        error!("[{} on server {}] No oneshot channel registered for deliver_sm", connection_information.client_address, connection_information.server_address);
+                                                    }
                                                 },
                                                 Err(error) => {
                                                     error!("[{} on server {}] unable to decode deliver_sm_resp", connection_information.client_address, connection_information.server_address);
@@ -263,7 +274,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                     }
                                 } else if header.command_id == CommandId::data_sm_resp as u32 {
                                     let mut guard = pending_requests.lock().await;
-                                    if let Some(time) = guard.remove(&header.sequence_number) {
+                                    if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                         // Time-out detection
@@ -275,10 +286,21 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             match data_sm_resp::decode(header, &pdu) {
                                                 Ok(data_sm_resp) => {
                                                     info!("[{} on server {}] received data_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                                    let handler = listener.clone();
                                                     let connection_information = connection_information.clone();
-                                                    let submit_sm_session_id = session_id.clone();
-                                                    handler.on_data_sm_resp(data_sm_resp.clone(), &connection_information, &submit_sm_session_id).await;
+                                                    
+                                                    // Send the response to the original sender
+                                                    if let Some(oneshot) = oneshot {
+                                                        match oneshot.send(Box::new(data_sm_resp.clone())) {
+                                                            Ok(_) => {
+                                                                info!("[{} on server {}] data_sm_resp sent to original sender", connection_information.client_address, connection_information.server_address);
+                                                            },
+                                                            Err(_) => {
+                                                                error!("[{} on server {}] unable to send data_sm_resp to original sender", connection_information.client_address, connection_information.server_address);
+                                                            }
+                                                        }
+                                                    } else {
+                                                        error!("[{} on server {}] No oneshot channel registered for data_sm", connection_information.client_address, connection_information.server_address);
+                                                    }
                                                 },
                                                 Err(error) => {
                                                     error!("[{} on server {}] unable to decode data_sm_resp", connection_information.client_address, connection_information.server_address);
@@ -318,7 +340,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                     // Last thing to do is general time-out detection
                     let mut pending_requests = pending_requests.lock().await;
 
-                    for (sequence_number, time) in pending_requests.iter_mut() {
+                    for (sequence_number, (time, _)) in pending_requests.iter_mut() {
                         let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
                         if lapsed > response_timer.into() {
                            // pending_requests.remove(&sequence_number_to_remove);
