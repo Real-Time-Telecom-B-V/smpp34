@@ -71,7 +71,13 @@ impl SMSC {
 
             let (tx, rx) = oneshot::channel();
 
-            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: submit_sm.encode(), oneshot: Some(tx) } ).await.expect("Unable to send deliver_sm request to writer thread");
+            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: submit_sm.encode(), oneshot: Some(tx) }).await {
+                Ok(_) => {},
+                Err(e) => {
+                    error!("[{} on server {}] unable to send submit_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
+                    return Err(SmppError::ESME_RSYSERR);
+                }
+            }
 
             let response = timeout(Duration::from_millis(self.response_timer), rx).await;
 
@@ -103,7 +109,13 @@ impl SMSC {
 
         let (tx, rx) = oneshot::channel();
 
-        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode(), oneshot: Some(tx) }).await.expect("Unable to send unbind request to writer thread");
+        match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode(), oneshot: Some(tx) }).await {
+            Ok(_) => {},
+            Err(e) => {
+                error!("[{} on server {}] unable to send unbind with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
+                return Err(SmppError::ESME_RSYSERR);
+            }
+        }
 
         let response = timeout(Duration::from_millis(self.response_timer), rx).await;
         match response {
@@ -131,7 +143,13 @@ impl SMSC {
 
             let (tx, rx) = oneshot::channel();
 
-            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: Some(tx) }).await.expect("Unable to send data_sm request to writer thread");
+            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: Some(tx) }).await {
+                Ok(_) => {},
+                Err(e) => {
+                    error!("[{} on server {}] unable to send data_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
+                    return Err(SmppError::ESME_RSYSERR);
+                }
+            }
 
             let response = timeout(Duration::from_millis(self.response_timer), rx).await;
 
@@ -163,7 +181,13 @@ impl SMSC {
 
             let (tx, rx) = oneshot::channel();
 
-            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: cancel_sm.encode(), oneshot: Some(tx) }).await.expect("Unable to send cancel_sm request to writer thread");
+            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: cancel_sm.encode(), oneshot: Some(tx) }).await {
+                Ok(_) => {},
+                Err(e) => {
+                    error!("[{} on server {}] unable to send cancel_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
+                    return Err(SmppError::ESME_RSYSERR);
+                }
+            }
 
             let response = timeout(Duration::from_millis(self.response_timer), rx).await;
 

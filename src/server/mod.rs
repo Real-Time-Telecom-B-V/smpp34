@@ -31,6 +31,7 @@ pub struct ESME {
     pub can_receive: bool,
     tx_channel: Sender<WriteFrame>,
     sequence_number: Arc<AtomicU32>,
+    response_timer: u64
 }
 
 impl ESME {
@@ -47,9 +48,15 @@ impl ESME {
 
             let (tx, rx) = oneshot::channel();
 
-            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: deliver_sm.encode(), oneshot: Some(tx) }).await.expect("Unable to send deliver_sm request to writer thread");
+            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: deliver_sm.encode(), oneshot: Some(tx) }).await {
+                Ok(_) => {},
+                Err(e) => {
+                    error!("[{} on server {}] unable to send deliver_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
+                    return Err(SmppError::ESME_RSYSERR);
+                }
+            }
 
-            let response = timeout(Duration::from_millis(2000), rx).await;
+            let response = timeout(Duration::from_millis(self.response_timer), rx).await;
 
             match response {
                 Ok(Ok(response)) => {
@@ -78,9 +85,15 @@ impl ESME {
 
         let (tx, rx) = oneshot::channel();
 
-        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode(), oneshot: Some(tx) }).await.expect("Unable to send unbind request to writer thread");
+        match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode(), oneshot: Some(tx) }).await {
+            Ok(_) => {},
+            Err(e) => {
+                error!("[{} on server {}] unable to send unbind with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
+                return Err(SmppError::ESME_RSYSERR);
+            }
+        }
 
-        let response = timeout(Duration::from_millis(2000), rx).await;
+        let response = timeout(Duration::from_millis(self.response_timer), rx).await;
         match response {
             Ok(Ok(response)) => {
                 let unbind_resp = response.as_any().downcast_ref::<unbind_resp>().expect("Unable to downcast unbind_resp");
@@ -105,9 +118,15 @@ impl ESME {
 
         let (tx, rx) = oneshot::channel();
 
-        self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: Some(tx) }).await.expect("Unable to send data_sm request to writer thread");
+        match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: Some(tx) }).await {
+            Ok(_) => {},
+            Err(e) => {
+                error!("[{} on server {}] unable to send data_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
+                return Err(SmppError::ESME_RSYSERR);
+            }
+        }
 
-        let response = timeout(Duration::from_millis(2000), rx).await;
+        let response = timeout(Duration::from_millis(self.response_timer), rx).await;
         match response {
             Ok(Ok(response)) => {
                 let data_sm_resp = response.as_any().downcast_ref::<data_sm_resp>().expect("Unable to downcast data_sm_resp");
@@ -132,7 +151,12 @@ impl ESME {
             info!("[{} on server {}] sending alert_notification with sequence_number {}", self.client_address, self.server_address, sequence_number);
 
             // No one-shot as this is a notification and we do not expect a response
-            self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: alert_notification.encode(), oneshot: None }).await.expect("Unable to send alert_notification request to writer thread");
+            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: alert_notification.encode(), oneshot: None }).await {
+                Ok(_) => {},
+                Err(e) => {
+                    error!("[{} on server {}] unable to send alert_notification with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
+                }
+            }
             sequence_number
         } else {
             panic!("Can not send alert_notification on non RX/TRX bind");

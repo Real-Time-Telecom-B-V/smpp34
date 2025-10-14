@@ -77,8 +77,10 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
 
             enquire_link_writer_tx.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: enquire_link::new(sequence_number).encode(), oneshot: None }).await.expect("Can not send to writer thread");
 
-            match enquire_link_rx.recv().await {
-                Some(sequence) => {
+            let response = timeout(response_timer, enquire_link_rx.recv()).await;
+
+            match response {
+                Ok(Some(sequence)) => {
                     // We want the sequence number to match, otherwise we must kill this bind
                     if sequence != sequence_number { 
                         error!("[{} on server {}] received enquire_link_resp with sequence_number {} did not match sequence_number {}", connection_information.client_address, connection_information.server_address, sequence, sequence_number);
@@ -86,7 +88,12 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                         break;
                     } 
                 },
-                None => {
+                Ok(None) => {
+                    error!("[{} on server {}] sent enquire_link with sequence_number {} channel closed", connection_information.client_address, connection_information.server_address, sequence_number);
+                    enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
+                    break;
+                },
+                Err(_) => {
                     error!("[{} on server {}] sent enquire_link with sequence_number {} no response within {}ms", connection_information.client_address, connection_information.server_address, sequence_number, response_timer.as_millis());
                     enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
                     break;
@@ -110,7 +117,8 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
         session_id: session_id.clone(),
         can_receive: bound_type == BOUND_TYPE::BOUND_RX || bound_type == BOUND_TYPE::BOUND_TRX, 
         tx_channel: tx.clone(), 
-        sequence_number }, &session_id 
+        sequence_number,
+        response_timer }, &session_id 
     ).await;
 
     loop {
