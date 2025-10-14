@@ -64,8 +64,8 @@ impl ESME {
                     info!("[{} on server {}] received deliver_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
                     Ok(deliver_sm_resp.clone())
                 },
-                Ok(Err(_)) => {
-                    error!("[{} on server {}] unable to receive deliver_sm_resp", self.client_address, self.server_address);
+                Ok(Err(e)) => {
+                    error!("[{} on server {}] unable to receive deliver_sm_resp: {}", self.client_address, self.server_address, e);
                     Err(SmppError::ESME_RSYSERR)
                 },
                 Err(_) => {
@@ -100,8 +100,8 @@ impl ESME {
                 info!("[{} on server {}] received unbind_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
                 Ok(unbind_resp.clone())
             },
-            Ok(Err(_)) => {
-                error!("[{} on server {}] unable to receive unbind_resp", self.client_address, self.server_address);
+            Ok(Err(e)) => {
+                error!("[{} on server {}] unable to receive unbind_resp: {}", self.client_address, self.server_address, e);
                 Err(SmppError::ESME_RSYSERR)
             },
             Err(_) => {
@@ -133,8 +133,8 @@ impl ESME {
                 info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
                 Ok(data_sm_resp.clone())
             },
-            Ok(Err(_)) => {
-                error!("[{} on server {}] unable to receive data_sm_resp", self.client_address, self.server_address);
+            Ok(Err(e)) => {
+                error!("[{} on server {}] unable to receive data_sm_resp: {}", self.client_address, self.server_address, e);
                 Err(SmppError::ESME_RSYSERR)
             },
             Err(_) => {

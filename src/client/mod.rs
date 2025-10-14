@@ -87,8 +87,8 @@ impl SMSC {
                     info!("[{} on server {}] received submit_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
                     Ok(submit_sm_resp.clone())
                 },
-                Ok(Err(_)) => {
-                    error!("[{} on server {}] unable to receive submit_sm_resp", self.client_address, self.server_address);
+                Ok(Err(e)) => {
+                    error!("[{} on server {}] unable to receive submit_sm_resp: {}", self.client_address, self.server_address, e);
                     Err(SmppError::ESME_RSYSERR)
                 },
                 Err(_) => {
@@ -124,8 +124,8 @@ impl SMSC {
                 info!("[{} on server {}] received unbind_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
                 Ok(unbind_resp.clone())
             },
-            Ok(Err(_)) => {
-                error!("[{} on server {}] unable to receive unbind_resp", self.client_address, self.server_address);
+            Ok(Err(e)) => {
+                error!("[{} on server {}] unable to receive unbind_resp: {}", self.client_address, self.server_address, e);
                 Err(SmppError::ESME_RSYSERR)
             },
             Err(_) => {
@@ -159,8 +159,8 @@ impl SMSC {
                     info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
                     Ok(data_sm_resp.clone())
                 },
-                Ok(Err(_)) => {
-                    error!("[{} on server {}] unable to receive data_sm_resp", self.client_address, self.server_address);
+                Ok(Err(e)) => {
+                    error!("[{} on server {}] unable to receive data_sm_resp: {}", self.client_address, self.server_address, e);
                     Err(SmppError::ESME_RSYSERR)
                 },
                 Err(_) => {
@@ -197,8 +197,8 @@ impl SMSC {
                     info!("[{} on server {}] received cancel_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
                     Ok(cancel_sm_resp.clone())
                 },
-                Ok(Err(_)) => {
-                    error!("[{} on server {}] unable to receive cancel_sm_resp", self.client_address, self.server_address);
+                Ok(Err(e)) => {
+                    error!("[{} on server {}] unable to receive cancel_sm_resp: {}", self.client_address, self.server_address, e);
                     Err(SmppError::ESME_RSYSERR)
                 },
                 Err(_) => {
