@@ -186,8 +186,23 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                     info!("[{} on server {}] received enquire_link_resp for sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
 
                                     // Send it to enquire_link thread for verification, it's waiting on it!
-                                    // Not using one shots here as we have a dedicated channel for enquire_link responses
                                     enquire_link_tx.send(header.sequence_number).await.expect("Unable to send sequence to enquire_link thread");
+
+                                    // Cleanup pending requests
+                                    let mut guard = pending_requests.lock().await;
+                                    if let Some((time, _)) = guard.remove(&header.sequence_number) {
+                                        drop(guard); // Explicitly drop the mutex guard so writes are not blocked
+
+                                        // Time-out detection
+                                        let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
+                                        if  lapsed > response_timer.into() {
+                                            error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
+                                            listener.on_timeout(header.sequence_number, &session_id).await;
+                                        } 
+
+                                    } else {
+                                        error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
+                                    }
                                     
                                 } else if header.command_id == CommandId::unbind as u32 {
 
