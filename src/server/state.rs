@@ -29,21 +29,19 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
     let alive = Arc::new(AtomicBool::new(false));
     alive.store(true, Ordering::SeqCst);
 
-    let (mut reader, writer) = stream.into_split();    
-    let writer = Arc::new(Mutex::new(writer));
+    let (mut reader, mut writer) = stream.into_split();    
 
     let (tx, mut rx) = channel::<WriteFrame>(100);
 
     let pending_requests: Arc<Mutex<HashMap<u32, (SystemTime, Option<tokio::sync::oneshot::Sender<Box<dyn SmppReply + Send + Sync + 'static>>>)>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let writer_alive = alive.clone();
-    let writer_stream = writer.clone();
     let writer_pending_requests = pending_requests.clone();
     let writer_thread = tokio::task::spawn(async move {
         info!("[{} on server {}] writer thread started", connection_information.client_address, connection_information.server_address);
         while writer_alive.load(Ordering::SeqCst) {
            if let Some(frame) = rx.recv().await {
-                match writer_stream.lock().await.write(&frame.pdu).await {
+                match writer.write(&frame.pdu).await {
                     Ok(_) => { 
                         if frame.our_sequence_number.is_some() {
                             writer_pending_requests.lock().await.insert(frame.our_sequence_number.unwrap(), (SystemTime::now(), frame.oneshot)); 
@@ -61,7 +59,6 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
 
     let send_enquire_link = alive.clone();
     let enquire_link_sequence_number = sequence_number.clone();
-    let enquire_link_writer = writer.clone();
     let enquire_link_writer_tx = tx.clone();
     let (enquire_link_tx, mut enquire_link_rx) = channel::<u32>(100); // Explicitly a sync channel
     let enquire_link_ticker = tokio::task::spawn(async move {
@@ -84,18 +81,15 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                     // We want the sequence number to match, otherwise we must kill this bind
                     if sequence != sequence_number { 
                         error!("[{} on server {}] received enquire_link_resp with sequence_number {} did not match sequence_number {}", connection_information.client_address, connection_information.server_address, sequence, sequence_number);
-                        enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
                         break;
                     } 
                 },
                 Ok(None) => {
                     error!("[{} on server {}] sent enquire_link with sequence_number {} channel closed", connection_information.client_address, connection_information.server_address, sequence_number);
-                    enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
                     break;
                 },
                 Err(_) => {
                     error!("[{} on server {}] sent enquire_link with sequence_number {} no response within {}ms", connection_information.client_address, connection_information.server_address, sequence_number, response_timer.as_millis());
-                    enquire_link_writer.lock().await.shutdown().await.expect("Unable to close TCP stream");
                     break;
                 }
             }
@@ -192,23 +186,8 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                     info!("[{} on server {}] received enquire_link_resp for sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
 
                                     // Send it to enquire_link thread for verification, it's waiting on it!
+                                    // Not using one shots here as we have a dedicated channel for enquire_link responses
                                     enquire_link_tx.send(header.sequence_number).await.expect("Unable to send sequence to enquire_link thread");
-
-                                    // Cleanup pending requests
-                                    let mut guard = pending_requests.lock().await;
-                                    if let Some((time, _)) = guard.remove(&header.sequence_number) {
-                                        drop(guard); // Explicitly drop the mutex guard so writes are not blocked
-
-                                        // Time-out detection
-                                        let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
-                                        if  lapsed > response_timer.into() {
-                                            error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
-                                            listener.on_timeout(header.sequence_number, &session_id).await;
-                                        } 
-
-                                    } else {
-                                        error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
-                                    }
                                     
                                 } else if header.command_id == CommandId::unbind as u32 {
 
@@ -339,15 +318,25 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
 
                     // Last thing to do is general time-out detection
                     let mut pending_requests = pending_requests.lock().await;
+                    let mut timed_out_sequences = Vec::new();
 
-                    for (sequence_number, (time, _)) in pending_requests.iter_mut() {
+                    pending_requests.retain(|sequence_number, (time, _)| {
                         let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
                         if lapsed > response_timer.into() {
-                           // pending_requests.remove(&sequence_number_to_remove);
+                            timed_out_sequences.push(*sequence_number);
                             error!("[{} on server {}] Response for sequence_number {} did not come in after {}ms lapsed", connection_information.client_address, connection_information.server_address, sequence_number, lapsed);
-                            
-                            listener.on_timeout(sequence_number.clone(), &session_id).await;
+                            false // Remove this entry
+                        } else {
+                            true // Keep this entry
                         }
+                    });
+
+                    // Release the lock before async calls
+                    drop(pending_requests);
+
+                    // Notify listeners for timed-out requests
+                    for sequence_number in timed_out_sequences {
+                        listener.on_timeout(sequence_number, &session_id).await;
                     }
                 }
             },
