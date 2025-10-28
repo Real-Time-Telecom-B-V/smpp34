@@ -9,7 +9,7 @@ use tokio::{io::{self, split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt
 use tokio_native_tls::{native_tls, TlsConnector, TlsStream};
 use uuid::Uuid;
 
-use crate::{alert_notification, bind_receiver, bind_transceiver, bind_transmitter, cancel_sm, cancel_sm_resp, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, enquire_link, submit_sm, submit_sm_resp, unbind, unbind_resp, CommandHeader, CommandId, SmppConnectionInformation, SmppError, SmppReply, WriteFrame};
+use crate::{CommandHeader, CommandId, SmppConnectionInformation, SmppError, SmppReply, WriteFrame, alert_notification, bind_receiver, bind_transceiver, bind_transmitter, cancel_sm, cancel_sm_resp, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, enquire_link, generic_nack, submit_sm, submit_sm_resp, unbind, unbind_resp};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BIND_TYPE {
@@ -83,9 +83,17 @@ impl SMSC {
 
             match response {
                 Ok(Ok(response)) => {
-                    let submit_sm_resp = response.as_any().downcast_ref::<submit_sm_resp>().expect("Unable to downcast submit_sm_resp");
-                    info!("[{} on server {}] received submit_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                    Ok(submit_sm_resp.clone())
+                    // response can be either submit_sm_resp or generic_nack
+                    if let Some(submit_sm_resp) = response.as_any().downcast_ref::<submit_sm_resp>() {
+                        info!("[{} on server {}] received submit_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                        return Ok(submit_sm_resp.clone());
+                    } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                        error!("[{} on server {}] received generic_nack in response to submit_sm with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack);
+                        return Err(generic_nack.get_error());
+                    } else {
+                        error!("[{} on server {}] received unknown response to submit_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                        return Err(SmppError::ESME_RSYSERR);
+                    }
                 },
                 Ok(Err(e)) => {
                     error!("[{} on server {}] unable to receive submit_sm_resp: {}", self.client_address, self.server_address, e);
@@ -120,9 +128,17 @@ impl SMSC {
         let response = timeout(Duration::from_millis(self.response_timer), rx).await;
         match response {
             Ok(Ok(response)) => {
-                let unbind_resp = response.as_any().downcast_ref::<unbind_resp>().expect("Unable to downcast unbind_resp");
-                info!("[{} on server {}] received unbind_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                Ok(unbind_resp.clone())
+                // response can be either unbind_resp or generic_nack
+                if let Some(unbind_resp) = response.as_any().downcast_ref::<unbind_resp>() {
+                    info!("[{} on server {}] received unbind_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                    Ok(unbind_resp.clone())
+                } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                    error!("[{} on server {}] received generic_nack in response to unbind with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack);
+                    Err(generic_nack.get_error())
+                } else {
+                    error!("[{} on server {}] received unknown response to unbind with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                    Err(SmppError::ESME_RSYSERR)
+                }
             },
             Ok(Err(e)) => {
                 error!("[{} on server {}] unable to receive unbind_resp: {}", self.client_address, self.server_address, e);
@@ -155,9 +171,17 @@ impl SMSC {
 
             match response {
                 Ok(Ok(response)) => {
-                    let data_sm_resp = response.as_any().downcast_ref::<data_sm_resp>().expect("Unable to downcast data_sm_resp");
-                    info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                    Ok(data_sm_resp.clone())
+                    // response can be either data_sm_resp or generic_nack
+                    if let Some(data_sm_resp) = response.as_any().downcast_ref::<data_sm_resp>() {
+                        info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                        Ok(data_sm_resp.clone())
+                    } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                        error!("[{} on server {}] received generic_nack in response to data_sm with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack);
+                        Err(generic_nack.get_error())
+                    } else {
+                        error!("[{} on server {}] received unknown response to data_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                        Err(SmppError::ESME_RSYSERR)
+                    }
                 },
                 Ok(Err(e)) => {
                     error!("[{} on server {}] unable to receive data_sm_resp: {}", self.client_address, self.server_address, e);
@@ -193,9 +217,17 @@ impl SMSC {
 
             match response {
                 Ok(Ok(response)) => {
-                    let cancel_sm_resp = response.as_any().downcast_ref::<cancel_sm_resp>().expect("Unable to downcast cancel_sm_resp");
-                    info!("[{} on server {}] received cancel_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                    Ok(cancel_sm_resp.clone())
+                    // response can be either cancel_sm_resp or generic_nack
+                    if let Some(cancel_sm_resp) = response.as_any().downcast_ref::<cancel_sm_resp>() {
+                        info!("[{} on server {}] received cancel_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                        Ok(cancel_sm_resp.clone())
+                    } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                        error!("[{} on server {}] received generic_nack in response to cancel_sm with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack);
+                        Err(generic_nack.get_error())
+                    } else {
+                        error!("[{} on server {}] received unknown response to cancel_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                        Err(SmppError::ESME_RSYSERR)
+                    }
                 },
                 Ok(Err(e)) => {
                     error!("[{} on server {}] unable to receive cancel_sm_resp: {}", self.client_address, self.server_address, e);
@@ -761,6 +793,43 @@ impl SmppClient {
                                                                                 error!("[{} on server {}] unable to decode unbind_resp", connection_information.client_address, connection_information.server_address);
                                                                                 let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
                                                                                 tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode(), oneshot: None }).await.expect("Can not send to writer thread");
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                } else if header.command_id == CommandId::generic_nack as u32 {
+                                                                    let mut guard = pending_requests.lock().await;
+                                                                    if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
+                                                                        drop(guard); // Explicitly drop the mutex guard so writes are not blocked
+
+                                                                        // Time-out detection
+                                                                        let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
+                                                                        if  lapsed > response_timer.into() {
+                                                                            error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
+                                                                            listener.on_timeout(header.sequence_number, &session_id).await;
+                                                                        } else {
+                                                                            match generic_nack::decode(header, &pdu) {
+                                                                                Ok(generic_nack) => {
+                                                                                    info!("[{} on server {}] received generic_nack with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                                                                    let connection_information = connection_information.clone();
+
+                                                                                    // Send the response to the original sender
+                                                                                    if let Some(oneshot) = oneshot {
+                                                                                        match oneshot.send(Box::new(generic_nack.clone())) {
+                                                                                            Ok(_) => {
+                                                                                                info!("[{} on server {}] generic_nack sent to original sender", connection_information.client_address, connection_information.server_address);
+                                                                                            },
+                                                                                            Err(_) => {
+                                                                                                error!("[{} on server {}] unable to send generic_nack to original sender", connection_information.client_address, connection_information.server_address);
+                                                                                            }
+                                                                                        }
+                                                                                    } else {
+                                                                                        error!("[{} on server {}] No oneshot channel registered for generic_nack", connection_information.client_address, connection_information.server_address);
+                                                                                    }
+                                                                                },
+                                                                                Err(_) => {
+                                                                                    error!("[{} on server {}] unable to decode generic_nack", connection_information.client_address, connection_information.server_address);
+                                                                                    // Not sending another generic_nack in response to a generic_nack as this would likely create an infinite loop
+                                                                                }
                                                                             }
                                                                         }
                                                                     }

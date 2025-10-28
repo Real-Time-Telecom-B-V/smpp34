@@ -54,9 +54,17 @@ impl ESME {
                 Ok(_) => {
                     match timeout(Duration::from_millis(self.response_timer), rx).await {
                         Ok(Ok(response)) => {
-                            let deliver_sm_resp = response.as_any().downcast_ref::<deliver_sm_resp>().expect("Unable to downcast deliver_sm_resp");
-                            info!("[{} on server {}] received deliver_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                            Ok(deliver_sm_resp.clone())
+                            // response can be either deliver_sm_resp or generic_nack
+                            if let Some(deliver_sm_resp) = response.as_any().downcast_ref::<deliver_sm_resp>() {
+                                info!("[{} on server {}] received deliver_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                                return Ok(deliver_sm_resp.clone());
+                            } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                                error!("[{} on server {}] received generic_nack in response to deliver_sm with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack.get_error());
+                                return Err(generic_nack.get_error());
+                            } else {
+                                error!("[{} on server {}] received unknown response type in response to deliver_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                                return Err(SmppError::ESME_RSYSERR);
+                            }
                         },
                         Ok(Err(e)) => {
                             error!("[{} on server {}] unable to receive deliver_sm_resp: {}", self.client_address, self.server_address, e);
@@ -97,9 +105,17 @@ impl ESME {
         let response = timeout(Duration::from_millis(self.response_timer), rx).await;
         match response {
             Ok(Ok(response)) => {
-                let unbind_resp = response.as_any().downcast_ref::<unbind_resp>().expect("Unable to downcast unbind_resp");
-                info!("[{} on server {}] received unbind_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                Ok(unbind_resp.clone())
+                // response can be either unbind_resp or generic_nack
+                if let Some(unbind_resp) = response.as_any().downcast_ref::<unbind_resp>() {
+                    info!("[{} on server {}] received unbind_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                    Ok(unbind_resp.clone())
+                } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                    error!("[{} on server {}] received generic_nack in response to unbind with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack.get_error());
+                    Err(generic_nack.get_error())
+                } else {
+                    error!("[{} on server {}] received unknown response type in response to unbind with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                    Err(SmppError::ESME_RSYSERR)
+                }
             },
             Ok(Err(e)) => {
                 error!("[{} on server {}] unable to receive unbind_resp: {}", self.client_address, self.server_address, e);
@@ -123,9 +139,17 @@ impl ESME {
             Ok(_) => {
                 match timeout(Duration::from_millis(self.response_timer), rx).await {
                     Ok(Ok(response)) => {
-                        let data_sm_resp = response.as_any().downcast_ref::<data_sm_resp>().expect("Unable to downcast data_sm_resp");
-                        info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                        Ok(data_sm_resp.clone())
+                        // response can be either data_sm_resp or generic_nack
+                        if let Some(data_sm_resp) = response.as_any().downcast_ref::<data_sm_resp>() {
+                            info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                            Ok(data_sm_resp.clone())
+                        } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                            error!("[{} on server {}] received generic_nack in response to data_sm with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack.get_error());
+                            Err(generic_nack.get_error())
+                        } else {
+                            error!("[{} on server {}] received unknown response type in response to data_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                            Err(SmppError::ESME_RSYSERR)
+                        }
                     },
                     Ok(Err(e)) => {
                         error!("[{} on server {}] unable to receive data_sm_resp: {}", self.client_address, self.server_address, e);

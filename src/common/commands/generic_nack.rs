@@ -1,4 +1,6 @@
-use crate::{CommandHeader, SmppError, CommandId};
+use num_traits::FromPrimitive;
+
+use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 
 /// 
 /// This is a generic negative acknowledgement to an SMPP PDU submitted with an invalid
@@ -12,6 +14,8 @@ use crate::{CommandHeader, SmppError, CommandId};
 pub struct generic_nack {
     pub(crate) header: CommandHeader
 }
+
+impl SmppReply for generic_nack {}
 
 impl generic_nack {
 
@@ -50,6 +54,8 @@ impl generic_nack {
     pub fn encode(self) -> Vec<u8> {
         self.header.encode()
     }
+
+    pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
 }
 
 #[cfg(test)]

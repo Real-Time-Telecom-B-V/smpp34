@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use log::{info, error};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::{mpsc::channel, Mutex}, time::{interval, timeout}};
 
-use crate::{bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, common::SmppError, data_sm_resp, deliver_sm_resp, enquire_link, server::ESME, submit_sm, unbind, CommandHeader, CommandId, SmppReply, SmppServerListener, WriteFrame};
+use crate::{CommandHeader, CommandId, SmppReply, SmppServerListener, WriteFrame, bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, common::SmppError, data_sm_resp, deliver_sm_resp, enquire_link, generic_nack, server::ESME, submit_sm, unbind};
 
 use crate::SmppConnectionInformation;
 
@@ -307,10 +307,46 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                     } else {
                                         error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                     }
-                                } else {
-                                    error!("[{} on server {}] Did not expect command_id {} for this bind, sending ESME_RINVBNDSTS in generick_nack", connection_information.client_address, connection_information.server_address, header.command_id);
-                                    let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVBNDSTS as u32, sequence_number: potential_seq_no };
-                                    tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode(), oneshot: None }).await.expect("Can not send to writer thread");
+                                } else if header.command_id == CommandId::generic_nack as u32 {
+                                    let mut guard = pending_requests.lock().await;
+                                    if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
+                                        drop(guard); // Explicitly drop the mutex guard so writes are not blocked
+                                        
+                                        // Time-out detection
+                                        let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
+                                        if  lapsed > response_timer.into() {
+                                            error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
+                                            listener.on_timeout(header.sequence_number, &session_id).await;
+                                        } else {
+                                            match generic_nack::decode(header, &pdu) {
+                                                Ok(generic_nack) => {
+                                                    info!("[{} on server {}] received generic_nack with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                                    let connection_information = connection_information.clone();
+
+                                                    // Send the response to the original sender
+                                                    if let Some(oneshot) = oneshot {
+                                                        match oneshot.send(Box::new(generic_nack.clone())) {
+                                                            Ok(_) => {
+                                                                info!("[{} on server {}] generic_nack sent to original sender", connection_information.client_address, connection_information.server_address);
+                                                            },
+                                                            Err(_) => {
+                                                                error!("[{} on server {}] unable to send generic_nack to original sender", connection_information.client_address, connection_information.server_address);
+                                                            }
+                                                        }
+                                                    } else {
+                                                        error!("[{} on server {}] No oneshot channel registered for generic_nack", connection_information.client_address, connection_information.server_address);
+                                                    }
+                                                }, 
+                                                Err(_) => {
+                                                    error!("[{} on server {}] unable to decode generic_nack", connection_information.client_address, connection_information.server_address);
+                                                    // Not sending another generic_nack in response to a generic_nack as this would likely create an infinite loop
+                                                }
+                                            }
+                                        }
+
+                                    } else {
+                                        error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
+                                    }
                                 }
                             },
                             Err(error) => {
