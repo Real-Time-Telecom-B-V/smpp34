@@ -230,9 +230,14 @@ impl submit_sm_resp {
      }
 
      pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<submit_sm_resp, SmppError> {
-        let message_id = parse_c_octet_string(pdu[16..].to_vec(), 65)?;
-        Ok(submit_sm_resp { header, message_id: Some(message_id) })
-     }
+        if header.command_status != SmppError::ESME_ROK as u32 {
+            // As per specification: "The submit_sm_resp PDU Body is not returned if the command_status field contains a non-zero value."
+            return Ok(submit_sm_resp { header, message_id: None });
+        } else {
+            let message_id = parse_c_octet_string(pdu[16..].to_vec(), 65)?;
+            Ok(submit_sm_resp { header, message_id: Some(message_id) })
+        }
+    }
 }
 
 impl SmppReply for submit_sm_resp {}
