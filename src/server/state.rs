@@ -347,6 +347,10 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                     } else {
                                         error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                     }
+                                } else {
+                                    error!("[{} on server {}] received unsupported PDU with command_id {} and sequence_number {}, sending generic_nack", connection_information.client_address, connection_information.server_address, header.command_id, potential_seq_no); 
+                                    let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVCMDID as u32, sequence_number: potential_seq_no };
+                                    tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                 }
                             },
                             Err(error) => {
