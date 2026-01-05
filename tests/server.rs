@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use log::{error, info};
-use smpp34::{bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, cancel_sm_resp, data_sm_resp, deliver_sm_resp, server::ESME, submit_sm, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation, SmppError, SmppServerListener};
+use smpp34::{bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, cancel_sm_resp, data_sm_resp, server::ESME, submit_sm, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation, SmppError, SmppServerListener};
 
 
 
@@ -66,6 +66,11 @@ impl SmppServerListener for TestSmppServerListener {
     async fn on_cancel_sm(&self, request: cancel_sm, connection_information: &SmppConnectionInformation, _session_id: &String) -> cancel_sm_resp {
         info!("[cancel_sm@{}] <{}> {:?}", connection_information.server_address, connection_information.client_address, request);
         request.accept()
+    }
+
+    async fn on_data_sm(&self, request: smpp34::data_sm, connection_information: &SmppConnectionInformation, _session_id: &String) -> data_sm_resp {
+        info!("[data_sm@{}] <{}> {:?}", connection_information.server_address, connection_information.client_address, request);
+        request.accept(String::from("5678"))
     }
     
     async fn on_timeout(&self, sequence_number: u32, _session_id: &String) {

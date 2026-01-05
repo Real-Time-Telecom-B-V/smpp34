@@ -250,6 +250,7 @@ pub trait SmppClientListener {
 
     async fn on_unbind(&self, unbind: unbind, connection_information: &SmppConnectionInformation, session_id: &String) -> unbind_resp;
     async fn on_deliver_sm(&self, deliver_sm: deliver_sm, connection_information: &SmppConnectionInformation, session_id: &String) -> deliver_sm_resp;
+    async fn on_data_sm(&self, data_sm: data_sm, connection_information: &SmppConnectionInformation, session_id: &String) -> data_sm_resp;
     async fn on_alert_notification(&self, alert_notification: alert_notification, connection_information: &SmppConnectionInformation, session_id: &String);
 
     /// Notification sent when an SMPP command timed-out (respone_timer triggered)
@@ -558,6 +559,23 @@ impl SmppClient {
                                                                     Err(error) => {
                                                                         error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
                                                                         let error = submit_sm::generic_reject(potential_seq_no, error).encode();
+                                                                        tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
+                                                                    }
+                                                                }
+                                                            } else if header.command_id == CommandId::data_sm as u32 {
+                                                                match data_sm::decode(header, &pdu) {
+                                                                    Ok(data_sm) => {
+                                                                        info!("[{} on server {}] received data_sm with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                                                        let handler = listener.clone();
+                                                                        let connection_information = connection_information.clone();
+                                                                        let data_sm_session_id = session_id.clone();
+
+                                                                        let data_sm_resp = handler.on_data_sm(data_sm.clone(), &connection_information, &data_sm_session_id).await;
+                                                                        tx.send(WriteFrame { our_sequence_number: None, pdu: data_sm_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
+                                                                    },
+                                                                    Err(error) => {
+                                                                        error!("[{} on server {}] unable to decode data_sm", connection_information.client_address, connection_information.server_address);
+                                                                        let error = data_sm::generic_reject(potential_seq_no, error).encode();
                                                                         tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                                                     }
                                                                 }

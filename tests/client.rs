@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use log::info;
-use smpp34::{alert_notification, client::{SmppClientListener, SMSC}, deliver_sm, deliver_sm_resp, unbind, unbind_resp, SmppConnectionInformation};
+use smpp34::{SmppConnectionInformation, alert_notification, client::{SMSC, SmppClientListener}, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, unbind, unbind_resp};
 use tokio::sync::Mutex;
 
 
@@ -42,6 +42,11 @@ impl SmppClientListener for TestSmppClientListener {
     
     async fn on_deliver_sm(&self, request: deliver_sm, _connection_information: &SmppConnectionInformation, _session_id: &String) -> deliver_sm_resp {
         request.accept()
+    }
+
+    async fn on_data_sm(&self, request: data_sm, _connection_information: &SmppConnectionInformation, _session_id: &String) -> data_sm_resp {
+        info!("Received data_sm: {:?}", request);
+        request.accept(String::from("1234"))
     }
 
     async fn on_alert_notification(&self, _request: alert_notification, _connection_information: &SmppConnectionInformation, _session_id: &String) {

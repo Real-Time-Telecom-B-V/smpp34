@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use log::{info, error};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, sync::{mpsc::channel, Mutex}, time::{interval, timeout}};
 
-use crate::{CommandHeader, CommandId, SmppReply, SmppServerListener, WriteFrame, bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, common::SmppError, data_sm_resp, deliver_sm_resp, enquire_link, generic_nack, server::ESME, submit_sm, unbind};
+use crate::{CommandHeader, CommandId, SmppReply, SmppServerListener, WriteFrame, bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter, bind_transmitter_resp, cancel_sm, common::SmppError, data_sm, data_sm_resp, deliver_sm_resp, enquire_link, generic_nack, server::ESME, submit_sm, unbind};
 
 use crate::SmppConnectionInformation;
 
@@ -148,6 +148,23 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                         Err(error) => {
                                             error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
+                                        }
+                                    }
+                                } else if header.command_id == CommandId::data_sm as u32 {
+                                    match data_sm::decode(header, &pdu) {
+                                        Ok(data_sm) => {
+                                            info!("[{} on server {}] received data_sm with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                            let handler = listener.clone();
+                                            let connection_information = connection_information.clone();
+                                            let data_sm_session_id = session_id.clone();
+
+                                            let data_sm_resp = handler.on_data_sm(data_sm.clone(), &connection_information, &data_sm_session_id).await;
+                                            tx.send(WriteFrame { our_sequence_number: None, pdu: data_sm_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
+                                        },
+                                        Err(error) => {
+                                            error!("[{} on server {}] unable to decode data_sm", connection_information.client_address, connection_information.server_address);
+                                            let error = data_sm::generic_reject(potential_seq_no, error).encode();
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
                                     }

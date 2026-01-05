@@ -197,6 +197,7 @@ pub trait SmppServerListener {
     async fn on_unbind(&self, unbind: unbind, connection_information: &SmppConnectionInformation, session_id: &String) -> unbind_resp;
     async fn on_submit_sm(&self, submit_sm: submit_sm, connection_information: &SmppConnectionInformation, session_id: &String) ->  submit_sm_resp;
     async fn on_cancel_sm(&self, cancel_sm: cancel_sm, connection_information: &SmppConnectionInformation, session_id: &String) -> cancel_sm_resp;
+    async fn on_data_sm(&self, data_sm: data_sm, connection_information: &SmppConnectionInformation, session_id: &String) -> data_sm_resp;
     
     /// Notification sent when an SMPP command timed-out (respone_timer triggered)
     async fn on_timeout(&self, sequence_number: u32, session_id: &String);
