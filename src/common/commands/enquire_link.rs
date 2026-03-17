@@ -1,3 +1,4 @@
+use log::error;
 use num_traits::FromPrimitive;
 
 use crate::{CommandHeader, SmppError, CommandId};
@@ -41,6 +42,7 @@ impl enquire_link {
             }
         }
         else {
+            error!("Passed a non enquire_link PDU to enquire_link::decode(), command_id: 0x{:08X}", header.command_id);
             return Err(SmppError::ESME_RINVCMDID)
         }
     }

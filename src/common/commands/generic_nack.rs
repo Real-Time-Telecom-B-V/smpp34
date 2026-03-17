@@ -1,3 +1,4 @@
+use log::error;
 use num_traits::FromPrimitive;
 
 use crate::{CommandHeader, CommandId, SmppError, SmppReply};
@@ -46,6 +47,7 @@ impl generic_nack {
             }
         }
         else {
+            error!("Passed a non generic_nack PDU to generic_nack::decode(), command_id: 0x{:08X}", header.command_id);
             return Err(SmppError::ESME_RINVCMDID)
         }
     }

@@ -1,3 +1,5 @@
+use log::error;
+
 use crate::{CommandHeader, SmppError, CommandId, common::parse_c_octet_string};
 
 /// The purpose of the outbind operation is to allow the SMSC signal an ESME to originate a
@@ -58,6 +60,7 @@ impl outbind {
             }
         }
         else {
+            error!("Passed a non outbind PDU to outbind::decode(), command_id: 0x{:08X}", header.command_id);
             return Err(SmppError::ESME_RINVCMDID)
         }
     }

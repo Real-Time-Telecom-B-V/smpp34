@@ -1,3 +1,4 @@
+use log::error;
 use num_traits::FromPrimitive;
 
 use crate::{CommandHeader, CommandId, SmppError, SmppReply};
@@ -50,6 +51,7 @@ impl unbind {
             }
         }
         else {
+            error!("Passed a non unbind PDU to unbind::decode(), command_id: 0x{:08X}", header.command_id);
             return Err(SmppError::ESME_RINVCMDID)
         }
     }
@@ -140,6 +142,7 @@ impl unbind_resp {
             }
         }
         else {
+            error!("Passed a non unbind_resp PDU to unbind_resp::decode(), command_id: 0x{:08X}", header.command_id);
             return Err(SmppError::ESME_RINVCMDID)
         }
     }
