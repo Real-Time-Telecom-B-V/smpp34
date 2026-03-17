@@ -8,6 +8,7 @@ pub use server::SmppServer;
 pub use server::SmppServerListener;
 
 pub use common::*;
+pub use common::tlv::{Tlv, TlvTag, TlvList, decode_tlvs, encode_tlvs, tlvs_encoded_len};
 
 #[macro_use] extern crate num_derive;
 

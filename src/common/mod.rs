@@ -1,4 +1,5 @@
 mod commands;
+pub mod tlv;
 
 use std::net::SocketAddr;
 
@@ -25,6 +26,7 @@ pub use commands::alert_notification::*;
 pub use commands::generic_nack::*;
 
 use nom::{
+    self,
     bytes::complete::{take, take_until},
     IResult,
 };
@@ -68,10 +70,10 @@ impl CommandHeader {
             Err(SmppError::ESME_RINVCMDLEN)
         } else {
             let command_header = CommandHeader {
-                command_length: u32::from_be_bytes(pdu[0..4].try_into().expect("Can not read command_length")),
-                command_id: u32::from_be_bytes(pdu[4..8].try_into().expect("Can not read command_id")), 
-                command_status: u32::from_be_bytes(pdu[8..12].try_into().expect("Can not read command_status")),
-                sequence_number: u32::from_be_bytes(pdu[12..16].try_into().expect("Can not read sequence_number")),
+                command_length: u32::from_be_bytes(pdu[0..4].try_into().map_err(|_| SmppError::ESME_RINVCMDLEN)?),
+                command_id: u32::from_be_bytes(pdu[4..8].try_into().map_err(|_| SmppError::ESME_RINVCMDLEN)?),
+                command_status: u32::from_be_bytes(pdu[8..12].try_into().map_err(|_| SmppError::ESME_RINVCMDLEN)?),
+                sequence_number: u32::from_be_bytes(pdu[12..16].try_into().map_err(|_| SmppError::ESME_RINVCMDLEN)?),
             };
 
             if pdu.len() != command_header.command_length as usize {
@@ -253,14 +255,15 @@ fn encode_bind_response(header: CommandHeader, system_id: Option<String>, sc_int
     buffer.append(&mut header.encode());
 
     if command_status == SmppError::ESME_ROK as u32 {
-        buffer.append(&mut system_id.expect("How can we have no system_id when command_status is ESME_ROK").into_bytes());
+        if let Some(id) = system_id {
+            buffer.append(&mut id.into_bytes());
+        }
         buffer.push(0x00); // system_id is a C-Octet-String so terminate with 0x00
     }
 
-    if sc_interface_version.is_some() {
-        let mut tlv_tag = vec![0x02, 0x10, 0x00, 0x01]; // TLV 0x0210 with Length 0x0001 as sc_interfae_version is only 1 byte
-        buffer.append(&mut tlv_tag); 
-        buffer.push(sc_interface_version.unwrap());
+    if let Some(version) = sc_interface_version {
+        let version_tlv = tlv::Tlv::from_tag(tlv::TlvTag::ScInterfaceVersion, vec![version]);
+        buffer.extend_from_slice(&version_tlv.encode());
     }
 
     buffer
@@ -302,7 +305,7 @@ fn parse_c_octet_string(bytes: Vec<u8>, maximum_length: usize) -> Result<String,
 }
 
 // Helper to parse C-Octet strings (null-terminated)
-fn parse_c_octet_string_nom(input: &[u8]) -> IResult<&[u8], String> {
+pub(crate) fn parse_c_octet_string_nom(input: &[u8]) -> IResult<&[u8], String> {
     let (input, result) = take_until("\0")(input)?;
     let (input, _) = take(1usize)(input)?; // consume the null byte
     Ok((input, String::from_utf8_lossy(result).to_string()))
@@ -323,32 +326,23 @@ fn parse_octet_string_as_vec(bytes: Vec<u8>, supposed_length: usize, maximum_len
 
 
 fn decode_bind_request(header: CommandHeader, pdu: &Vec<u8>) -> Result<CommonBindRequestParameters, SmppError> {
-    // CommondHeader decode method makes sure that PDU length matches the command_length so no need to check this again
-    
-    // First we expect the system_id which is a C-Octet-String terminated by 0 and maximum 16 in length
-    let system_id = parse_c_octet_string(pdu[16..].to_vec(), 16)?;
-
-    // Then we expect the password which is a C-Octet-String terminated by 0 and maximum 9 in length
-    let password = parse_c_octet_string(pdu[16 + system_id.len() + 1..].to_vec(), 9)?;
-
-    // Then we expect the system_type which is a C-Octet-String terminated by 0 and maximum 13 in length
-    let system_type = parse_c_octet_string(pdu[16 + system_id.len() + password.len() + 2..].to_vec(), 13)?;
-
-    let interface_version = parse_next_int(pdu, 16 + system_id.len() + password.len() + system_type.len() + 3)?;
-    let addr_ton = parse_next_int(pdu, 16 + system_id.len() + password.len() + system_type.len() + 4)?;
-    let addr_npi = parse_next_int(pdu, 16 + system_id.len() + password.len() + system_type.len() + 5)?;
-
-    // Then we expect the address_range which is a C-Octet-String terminated by 0 and maximum 41 in length
-    let address_range = parse_c_octet_string(pdu[16 + system_id.len() + password.len() + system_type.len() + 6..].to_vec(), 41)?;
+    if pdu.len() < 16 {
+        return Err(SmppError::ESME_RINVCMDLEN);
+    }
+    let input = &pdu[16..];
+    let (input, system_id) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+    let (input, password) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+    let (input, system_type) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+    let (input, interface_version_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+    let (input, addr_ton_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+    let (input, addr_npi_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+    let (_input, address_range) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
 
     Ok(CommonBindRequestParameters {
-        header,
-        system_id,
-        password,
-        system_type,
-        interface_version,
-        addr_ton,
-        addr_npi,
+        header, system_id, password, system_type,
+        interface_version: interface_version_bytes[0],
+        addr_ton: addr_ton_bytes[0],
+        addr_npi: addr_npi_bytes[0],
         address_range,
     })
 }

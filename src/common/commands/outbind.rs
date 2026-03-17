@@ -58,7 +58,7 @@ impl outbind {
             }
         }
         else {
-            panic!("Passed a non outbind to decode()")
+            return Err(SmppError::ESME_RINVCMDID)
         }
     }
 
@@ -139,10 +139,10 @@ mod outbind_tests {
     }
 
     #[test]
-    #[should_panic(expected = "Passed a non outbind to decode()")]
     fn decode_outbind_with_invalid_command_id() {
         let pdu = vec![0x00, 0x0, 0x00, 0x18, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x61, 0x62, 0x63, 0x00, 0x31, 0x32, 0x33, 0x00];
         let decoded_command_header = CommandHeader::decode(&pdu).expect("Can not decode command header");
-        outbind::decode(decoded_command_header, &pdu).expect("Unable to decode outbind");
+        let result = outbind::decode(decoded_command_header, &pdu);
+        assert!(result.is_err());
     }
 }

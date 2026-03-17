@@ -50,7 +50,7 @@ impl unbind {
             }
         }
         else {
-            panic!("Passed a non unbind to decode()")
+            return Err(SmppError::ESME_RINVCMDID)
         }
     }
 
@@ -140,7 +140,7 @@ impl unbind_resp {
             }
         }
         else {
-            panic!("Passed a non unbind_resp to decode()")
+            return Err(SmppError::ESME_RINVCMDID)
         }
     }
 }
@@ -186,11 +186,11 @@ mod all_unbind_tests {
         }
     
         #[test]
-        #[should_panic(expected = "Passed a non unbind to decode()")]
         fn decode_generic_nack_with_invalid_command_id() {
             let pdu = vec![0x00, 0x00, 0x00, 0x10, 0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x12, 0x34, 0x45, 0x67];
             let decoded_command_header = CommandHeader::decode(&pdu).expect("Can not decode command header");
-            unbind::decode(decoded_command_header, &pdu).expect("Unable to decode unbind");
+            let result = unbind::decode(decoded_command_header, &pdu);
+            assert!(result.is_err());
         }
     
         #[test]

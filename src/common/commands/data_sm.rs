@@ -1,15 +1,15 @@
-use log::warn;
+use nom::bytes::complete::take;
 use num_traits::FromPrimitive;
-
-use crate::{common::{parse_c_octet_string, parse_next_int}, CommandHeader, CommandId, SmppError, SmppReply};
+use crate::common::parse_c_octet_string_nom;
+use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 
 #[derive(Debug, Clone)]
 pub struct data_sm  {
     header: CommandHeader,
     /// The service_type parameter can be used to indicate the SMS Application service associated with the message.
     /// Specifying the service_type allows the ESME to
-    /// • avail of enhanced messaging services such as “replace by service” type
-    /// • to control the teleservice used on the air interface.
+    /// - avail of enhanced messaging services such as "replace by service" type
+    /// - to control the teleservice used on the air interface.
     /// Set to NULL for default SMSC settings.
     pub service_type: String,
     pub source_addr_ton: u8,
@@ -25,50 +25,13 @@ pub struct data_sm  {
 
 impl data_sm {
 
-    // TODO optional parameters
     pub (crate) fn new(sequence_number: u32, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) -> data_sm {
-        data_sm { 
-            header: CommandHeader { 
-                command_length: (16 + service_type.len() + 1 + 2 + source_addr.len() + 1 + 2 + destination_addr.len() + 3) as u32,  
-                command_id: CommandId::data_sm as u32, 
-                command_status: SmppError::ESME_ROK as u32, 
-                sequence_number }, 
-            service_type, 
-            source_addr_ton, 
-            source_addr_npi, 
-            source_addr, 
-            dest_addr_ton, 
-            dest_addr_npi, 
-            destination_addr, 
-            esm_class, 
-            registered_delivery, 
-            data_coding
-        }
-    }
-
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<data_sm, SmppError> {
-        warn!("Decode not fully implemented yet, optional parameters not available");
-    
-        let service_type = parse_c_octet_string(pdu[16..].to_vec(), 6)?;
-
-        let start = 16 + service_type.len();
-        let source_addr_ton =  parse_next_int(pdu, start + 1)?;
-        let source_addr_npi =  parse_next_int(pdu, start + 2)?;
-        let source_addr = parse_c_octet_string(pdu[start + 3..].to_vec(), 21)?;
-
-        let start = start + 2 + source_addr.len() + 1;
-        let dest_addr_ton =  parse_next_int(pdu, start + 1)?;
-        let dest_addr_npi =  parse_next_int(pdu, start + 2)?;
-        let destination_addr = parse_c_octet_string(pdu[start + 3..].to_vec(), 21)?;
-
-        let start = start + 2 + destination_addr.len() + 1;
-        let esm_class = parse_next_int(pdu, start + 1)?;
-        let registered_delivery = parse_next_int(pdu, start + 2)?;
-        let data_coding = parse_next_int(pdu, start + 3)?;
-
-        
-        Ok(data_sm {
-            header,
+        data_sm {
+            header: CommandHeader {
+                command_length: (16 + service_type.len() + 1 + 2 + source_addr.len() + 1 + 2 + destination_addr.len() + 1 + 3) as u32,
+                command_id: CommandId::data_sm as u32,
+                command_status: SmppError::ESME_ROK as u32,
+                sequence_number },
             service_type,
             source_addr_ton,
             source_addr_npi,
@@ -78,12 +41,58 @@ impl data_sm {
             destination_addr,
             esm_class,
             registered_delivery,
-            data_coding,
+            data_coding
+        }
+    }
+
+    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<data_sm, SmppError> {
+        if pdu.len() < 16 {
+            return Err(SmppError::ESME_RINVCMDLEN);
+        }
+        let input = &pdu[16..];
+        let (input, service_type) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, source_addr_ton_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, source_addr_npi_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, source_addr) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, dest_addr_ton_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, dest_addr_npi_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, destination_addr) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, esm_class_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, registered_delivery_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (_input, data_coding_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+
+        Ok(data_sm {
+            header,
+            service_type,
+            source_addr_ton: source_addr_ton_bytes[0],
+            source_addr_npi: source_addr_npi_bytes[0],
+            source_addr,
+            dest_addr_ton: dest_addr_ton_bytes[0],
+            dest_addr_npi: dest_addr_npi_bytes[0],
+            destination_addr,
+            esm_class: esm_class_bytes[0],
+            registered_delivery: registered_delivery_bytes[0],
+            data_coding: data_coding_bytes[0],
         })
     }
 
     pub fn encode(self) -> Vec<u8> {
-        todo!()
+        let mut buffer: Vec<u8> = Vec::with_capacity(self.header.command_length as usize);
+        buffer.extend_from_slice(&self.header.encode());
+        buffer.extend_from_slice(self.service_type.as_bytes());
+        buffer.push(0x00);
+        buffer.push(self.source_addr_ton);
+        buffer.push(self.source_addr_npi);
+        buffer.extend_from_slice(self.source_addr.as_bytes());
+        buffer.push(0x00);
+        buffer.push(self.dest_addr_ton);
+        buffer.push(self.dest_addr_npi);
+        buffer.extend_from_slice(self.destination_addr.as_bytes());
+        buffer.push(0x00);
+        buffer.push(self.esm_class);
+        buffer.push(self.registered_delivery);
+        buffer.push(self.data_coding);
+        buffer
     }
 
     pub fn accept(self, message_id: String) -> data_sm_resp {
@@ -131,7 +140,7 @@ impl data_sm_resp {
     pub fn command_status(&self) -> u32 { self.header.command_status }
     pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
 
-    pub fn encode(self) -> Vec<u8> { 
+    pub fn encode(self) -> Vec<u8> {
         let mut buffer:Vec<u8> = Vec::with_capacity(self.header.command_length.try_into().unwrap());
         buffer.append(&mut self.header.encode());
 
@@ -143,8 +152,17 @@ impl data_sm_resp {
         buffer
      }
 
-     pub fn decode(_header: CommandHeader, _pdu: &Vec<u8>) -> Result<data_sm_resp, SmppError> {
-        todo!()
+     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<data_sm_resp, SmppError> {
+        if header.command_status != SmppError::ESME_ROK as u32 {
+            return Ok(data_sm_resp { header, message_id: None });
+        }
+        if pdu.len() > 16 {
+            let input = &pdu[16..];
+            let (_input, message_id) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+            Ok(data_sm_resp { header, message_id: Some(message_id) })
+        } else {
+            Ok(data_sm_resp { header, message_id: None })
+        }
      }
 }
 

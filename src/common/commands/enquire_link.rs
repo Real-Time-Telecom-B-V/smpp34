@@ -41,7 +41,7 @@ impl enquire_link {
             }
         }
         else {
-            panic!("Passed a non enquire_link to decode()")
+            return Err(SmppError::ESME_RINVCMDID)
         }
     }
 
@@ -161,11 +161,11 @@ mod all_enquire_link_tests {
         }
     
         #[test]
-        #[should_panic(expected = "Passed a non enquire_link to decode()")]
         fn decode_generic_nack_with_invalid_command_id() {
             let pdu = vec![0x00, 0x00, 0x00, 0x10, 0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x12, 0x34, 0x45, 0x67];
             let decoded_command_header = CommandHeader::decode(&pdu).expect("Can not decode command header");
-            enquire_link::decode(decoded_command_header, &pdu).expect("Unable to decode enquire_link");
+            let result = enquire_link::decode(decoded_command_header, &pdu);
+            assert!(result.is_err());
         }
     
         #[test]
