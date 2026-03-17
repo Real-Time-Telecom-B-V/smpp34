@@ -146,7 +146,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: submit_sm_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
-                                            error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
+                                            error!("[{} on server {}] unable to decode submit_sm: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
@@ -163,7 +163,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: data_sm_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
-                                            error!("[{} on server {}] unable to decode data_sm", connection_information.client_address, connection_information.server_address);
+                                            error!("[{} on server {}] unable to decode data_sm: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                             let error = data_sm::generic_reject(potential_seq_no, error).encode();
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
@@ -180,7 +180,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: cancel_sm_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
-                                            error!("[{} on server {}] unable to decode submit_sm", connection_information.client_address, connection_information.server_address);
+                                            error!("[{} on server {}] unable to decode cancel_sm: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
@@ -194,7 +194,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: enquire_link_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
-                                            error!("[{} on server {}] unable to decode enquire_link", connection_information.client_address, connection_information.server_address);
+                                            error!("[{} on server {}] unable to decode enquire_link: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                             let error = submit_sm::generic_reject(potential_seq_no, error).encode();
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
@@ -233,7 +233,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: unbind_resp.encode(), oneshot: None }).await.expect("Can not send to writer thread");
                                         },
                                         Err(error) => {
-                                            error!("[{} on server {}] unable to decode unbind", connection_information.client_address, connection_information.server_address);
+                                            error!("[{} on server {}] unable to decode unbind: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                             let error = unbind::generic_reject(potential_seq_no, error).encode();
                                             tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                         }
@@ -273,7 +273,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                                     }
                                                 },
                                                 Err(error) => {
-                                                    error!("[{} on server {}] unable to decode deliver_sm_resp", connection_information.client_address, connection_information.server_address);
+                                                    error!("[{} on server {}] unable to decode deliver_sm_resp: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                     let error = submit_sm::generic_reject(potential_seq_no, error).encode();
                                                     tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                                 }
@@ -314,7 +314,7 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                                     }
                                                 },
                                                 Err(error) => {
-                                                    error!("[{} on server {}] unable to decode data_sm_resp", connection_information.client_address, connection_information.server_address);
+                                                    error!("[{} on server {}] unable to decode data_sm_resp: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                     let error = submit_sm::generic_reject(potential_seq_no, error).encode();
                                                     tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await.expect("Can not send to writer thread");
                                                 }
@@ -354,8 +354,8 @@ async fn read_loop(bound_type: BOUND_TYPE, listener: Arc<dyn SmppServerListener 
                                                         error!("[{} on server {}] No oneshot channel registered for generic_nack", connection_information.client_address, connection_information.server_address);
                                                     }
                                                 }, 
-                                                Err(_) => {
-                                                    error!("[{} on server {}] unable to decode generic_nack", connection_information.client_address, connection_information.server_address);
+                                                Err(error) => {
+                                                    error!("[{} on server {}] unable to decode generic_nack: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                     // Not sending another generic_nack in response to a generic_nack as this would likely create an infinite loop
                                                 }
                                             }
