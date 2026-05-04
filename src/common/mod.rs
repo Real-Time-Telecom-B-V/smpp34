@@ -166,7 +166,7 @@ pub (crate) enum CommandId {
     data_sm_resp = 0x80000103,
 }
 
-#[derive(Debug, PartialEq, FromPrimitive, ToPrimitive)]
+#[derive(Debug, Clone, Copy, PartialEq, FromPrimitive, ToPrimitive)]
 pub enum SmppError {
     ESME_ROK = 0x00000000, // No Error
     ESME_RINVMSGLEN = 0x00000001, // Message Length is invalid
