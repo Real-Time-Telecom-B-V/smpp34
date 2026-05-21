@@ -326,7 +326,7 @@ impl StreamWrapper {
 impl SmppClient {
 
     pub fn new(server_address: String, server_port: u16, tls: bool, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<dyn SmppClientListener + Send + Sync + 'static>, window_size: usize) -> SmppClient {
-        SmppClient::new_with_default_timers(server_address, server_port, tls, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handler, 5000, 30000, 60000, 2000, 1500, window_size)
+        SmppClient::new_with_default_timers(server_address, server_port, tls, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handler, 5000, 30000, 300000, 30000, 1500, window_size)
     } 
 
     pub fn new_with_default_timers(server_address: String, server_port: u16, tls: bool, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<dyn SmppClientListener + Send + Sync + 'static>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, window_size: usize) -> SmppClient {

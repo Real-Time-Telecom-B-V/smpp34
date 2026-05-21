@@ -214,7 +214,7 @@ pub trait SmppServerListener {
 impl SmppServer {
 
     pub fn new(address: IpAddr, port: u16, handler: Arc<dyn SmppServerListener + Send + Sync>) -> SmppServer {
-        SmppServer::new_with_default_timers(address, port, handler, 5000, 30000, 60000, 2000, 1500)
+        SmppServer::new_with_default_timers(address, port, handler, 5000, 30000, 300000, 30000, 1500)
     } 
 
     pub fn new_with_default_timers(address: IpAddr, port: u16, handler: Arc<dyn SmppServerListener + Send + Sync>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize) -> SmppServer {
