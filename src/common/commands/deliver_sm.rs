@@ -1,11 +1,11 @@
+use crate::common::parse_c_octet_string_nom;
+use crate::common::tlv::{decode_tlvs, encode_tlvs, tlvs_encoded_len, Tlv};
+use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 use nom::bytes::complete::take;
 use num_traits::FromPrimitive;
-use crate::common::parse_c_octet_string_nom;
-use crate::common::tlv::{Tlv, decode_tlvs, encode_tlvs, tlvs_encoded_len};
-use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 
 #[derive(Debug, Clone)]
-pub struct deliver_sm  {
+pub struct deliver_sm {
     header: CommandHeader,
     /// The service_type parameter can be used to indicate the SMS Application service associated with the message.
     /// Specifying the service_type allows the ESME to
@@ -33,32 +33,81 @@ pub struct deliver_sm  {
     pub tlvs: Vec<Tlv>,
 }
 
-fn message_command_length(service_type: &str, source_addr: &str, destination_addr: &str, schedule_delivery_time: &str, validity_period: &str, short_message: &[u8]) -> u32 {
-    (16
-        + service_type.len() + 1
-        + 1 + 1 + source_addr.len() + 1
-        + 1 + 1 + destination_addr.len() + 1
-        + 1 + 1 + 1
-        + schedule_delivery_time.len() + 1
-        + validity_period.len() + 1
-        + 1 + 1 + 1 + 1 + 1
+fn message_command_length(
+    service_type: &str,
+    source_addr: &str,
+    destination_addr: &str,
+    schedule_delivery_time: &str,
+    validity_period: &str,
+    short_message: &[u8],
+) -> u32 {
+    (16 + service_type.len()
+        + 1
+        + 1
+        + 1
+        + source_addr.len()
+        + 1
+        + 1
+        + 1
+        + destination_addr.len()
+        + 1
+        + 1
+        + 1
+        + 1
+        + schedule_delivery_time.len()
+        + 1
+        + validity_period.len()
+        + 1
+        + 1
+        + 1
+        + 1
+        + 1
+        + 1
         + short_message.len()) as u32
 }
 
 impl deliver_sm {
+    pub fn new(
+        sequence_number: u32,
+        service_type: String,
+        source_addr_ton: u8,
+        source_addr_npi: u8,
+        source_addr: String,
+        dest_addr_ton: u8,
+        dest_addr_npi: u8,
+        destination_addr: String,
+        esm_class: u8,
+        protocol_id: u8,
+        priority_flag: u8,
+        schedule_delivery_time: String,
+        validity_period: String,
+        registered_delivery: u8,
+        replace_if_present_flag: u8,
+        data_coding: u8,
+        sm_default_msg_id: u8,
+        short_message: Vec<u8>,
+    ) -> deliver_sm {
+        assert!(
+            short_message.len() <= 254,
+            "Message can only be a maximum of 254 characters"
+        );
 
-    pub fn new(sequence_number: u32, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: Vec<u8>) -> deliver_sm {
-
-        assert!(short_message.len() <= 254, "Message can only be a maximum of 254 characters");
-
-        let cmd_len = message_command_length(&service_type, &source_addr, &destination_addr, &schedule_delivery_time, &validity_period, &short_message);
+        let cmd_len = message_command_length(
+            &service_type,
+            &source_addr,
+            &destination_addr,
+            &schedule_delivery_time,
+            &validity_period,
+            &short_message,
+        );
 
         deliver_sm {
             header: CommandHeader {
                 command_length: cmd_len,
                 command_id: CommandId::deliver_sm as u32,
                 command_status: SmppError::ESME_ROK as u32,
-                sequence_number },
+                sequence_number,
+            },
             service_type,
             source_addr_ton,
             source_addr_npi,
@@ -86,25 +135,56 @@ impl deliver_sm {
             return Err(SmppError::ESME_RINVCMDLEN);
         }
         let input = &pdu[16..];
-        let (input, service_type) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, source_addr_ton_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, source_addr_npi_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, source_addr) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, dest_addr_ton_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, dest_addr_npi_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, destination_addr) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, esm_class_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, protocol_id_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, priority_flag_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, schedule_delivery_time) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, validity_period) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, registered_delivery_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, replace_if_present_flag_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, data_coding_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, sm_default_msg_id_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, sm_length_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, service_type) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, source_addr_ton_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, source_addr_npi_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, source_addr) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, dest_addr_ton_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, dest_addr_npi_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, destination_addr) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, esm_class_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, protocol_id_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, priority_flag_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, schedule_delivery_time) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, validity_period) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, registered_delivery_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, replace_if_present_flag_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, data_coding_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, sm_default_msg_id_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, sm_length_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
         let sm_length = sm_length_bytes[0];
-        let (input, short_message) = take::<usize, &[u8], nom::error::Error<&[u8]>>(sm_length as usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, short_message) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(sm_length as usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
 
         let tlvs = decode_tlvs(input);
 
@@ -133,7 +213,14 @@ impl deliver_sm {
     }
 
     pub fn encode(self) -> Vec<u8> {
-        let base_len = message_command_length(&self.service_type, &self.source_addr, &self.destination_addr, &self.schedule_delivery_time, &self.validity_period, &self.short_message);
+        let base_len = message_command_length(
+            &self.service_type,
+            &self.source_addr,
+            &self.destination_addr,
+            &self.schedule_delivery_time,
+            &self.validity_period,
+            &self.short_message,
+        );
         let total_len = base_len + tlvs_encoded_len(&self.tlvs) as u32;
 
         let mut buffer: Vec<u8> = Vec::with_capacity(total_len as usize);
@@ -170,30 +257,39 @@ impl deliver_sm {
     }
 
     pub fn accept(self) -> deliver_sm_resp {
-        deliver_sm_resp { header: CommandHeader {
-            command_length: 16 + 1, // message_id is a C-Octet-String (and is always NULL in deliver_sm_resp)
-            command_id: CommandId::deliver_sm_resp as u32,
-            command_status: SmppError::ESME_ROK as u32,
-            sequence_number: self.header.sequence_number,
-        }, message_id: "".into() }
+        deliver_sm_resp {
+            header: CommandHeader {
+                command_length: 16 + 1, // message_id is a C-Octet-String (and is always NULL in deliver_sm_resp)
+                command_id: CommandId::deliver_sm_resp as u32,
+                command_status: SmppError::ESME_ROK as u32,
+                sequence_number: self.header.sequence_number,
+            },
+            message_id: "".into(),
+        }
     }
 
     pub fn reject(self, error: SmppError) -> deliver_sm_resp {
-        deliver_sm_resp { header: CommandHeader {
-            command_length: 16,
-            command_id: CommandId::deliver_sm_resp as u32,
-            command_status: error as u32,
-            sequence_number: self.header.sequence_number,
-        }, message_id: "".into() }
+        deliver_sm_resp {
+            header: CommandHeader {
+                command_length: 16,
+                command_id: CommandId::deliver_sm_resp as u32,
+                command_status: error as u32,
+                sequence_number: self.header.sequence_number,
+            },
+            message_id: "".into(),
+        }
     }
 
     pub fn generic_reject(sequence_number: u32, error: SmppError) -> deliver_sm_resp {
-        deliver_sm_resp { header: CommandHeader {
-            command_length: 16,
-            command_id: CommandId::deliver_sm_resp as u32,
-            command_status: error as u32,
-            sequence_number,
-        }, message_id: "".into() }
+        deliver_sm_resp {
+            header: CommandHeader {
+                command_length: 16,
+                command_id: CommandId::deliver_sm_resp as u32,
+                command_status: error as u32,
+                sequence_number,
+            },
+            message_id: "".into(),
+        }
     }
 }
 
@@ -201,36 +297,50 @@ impl deliver_sm {
 pub struct deliver_sm_resp {
     header: CommandHeader,
     /// This field is unused and is set to NULL
-    message_id: String
+    message_id: String,
 }
 
 impl deliver_sm_resp {
-
-    pub fn is_success(&self) -> bool { self.header.command_status == SmppError::ESME_ROK as u32}
-    pub fn command_status(&self) -> u32 { self.header.command_status }
-    pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
+    pub fn is_success(&self) -> bool {
+        self.header.command_status == SmppError::ESME_ROK as u32
+    }
+    pub fn command_status(&self) -> u32 {
+        self.header.command_status
+    }
+    pub fn get_error(&self) -> SmppError {
+        FromPrimitive::from_u32(self.header.command_status)
+            .expect("Can not convert command_status to SmppError")
+    }
 
     pub fn encode(self) -> Vec<u8> {
-        let mut buffer:Vec<u8> = Vec::with_capacity(self.header.command_length.try_into().unwrap());
+        let mut buffer: Vec<u8> =
+            Vec::with_capacity(self.header.command_length.try_into().unwrap());
         buffer.append(&mut self.header.encode());
         buffer.append(&mut self.message_id.as_bytes().to_vec());
         buffer.push(0x00); // Terminate C-Octet-String
 
         buffer
-     }
+    }
 
-     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<deliver_sm_resp, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<deliver_sm_resp, SmppError> {
         if header.command_status != SmppError::ESME_ROK as u32 {
-            return Ok(deliver_sm_resp { header, message_id: String::new() });
+            return Ok(deliver_sm_resp {
+                header,
+                message_id: String::new(),
+            });
         }
         if pdu.len() > 16 {
             let input = &pdu[16..];
-            let (_input, message_id) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+            let (_input, message_id) =
+                parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
             Ok(deliver_sm_resp { header, message_id })
         } else {
-            Ok(deliver_sm_resp { header, message_id: String::new() })
+            Ok(deliver_sm_resp {
+                header,
+                message_id: String::new(),
+            })
         }
-     }
+    }
 }
 
 impl SmppReply for deliver_sm_resp {}

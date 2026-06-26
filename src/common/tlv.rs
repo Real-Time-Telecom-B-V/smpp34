@@ -59,8 +59,15 @@ pub enum TlvTag {
 }
 
 impl Tlv {
-    pub fn new(tag: u16, value: Vec<u8>) -> Self { Tlv { tag, value } }
-    pub fn from_tag(tag: TlvTag, value: Vec<u8>) -> Self { Tlv { tag: tag as u16, value } }
+    pub fn new(tag: u16, value: Vec<u8>) -> Self {
+        Tlv { tag, value }
+    }
+    pub fn from_tag(tag: TlvTag, value: Vec<u8>) -> Self {
+        Tlv {
+            tag: tag as u16,
+            value,
+        }
+    }
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(4 + self.value.len());
         buf.extend_from_slice(&self.tag.to_be_bytes());
@@ -68,12 +75,41 @@ impl Tlv {
         buf.extend_from_slice(&self.value);
         buf
     }
-    pub fn encoded_len(&self) -> usize { 4 + self.value.len() }
-    pub fn as_u8(&self) -> Option<u8> { if self.value.len() == 1 { Some(self.value[0]) } else { None } }
-    pub fn as_u16(&self) -> Option<u16> { if self.value.len() == 2 { Some(u16::from_be_bytes([self.value[0], self.value[1]])) } else { None } }
-    pub fn as_u32(&self) -> Option<u32> { if self.value.len() == 4 { Some(u32::from_be_bytes([self.value[0], self.value[1], self.value[2], self.value[3]])) } else { None } }
+    pub fn encoded_len(&self) -> usize {
+        4 + self.value.len()
+    }
+    pub fn as_u8(&self) -> Option<u8> {
+        if self.value.len() == 1 {
+            Some(self.value[0])
+        } else {
+            None
+        }
+    }
+    pub fn as_u16(&self) -> Option<u16> {
+        if self.value.len() == 2 {
+            Some(u16::from_be_bytes([self.value[0], self.value[1]]))
+        } else {
+            None
+        }
+    }
+    pub fn as_u32(&self) -> Option<u32> {
+        if self.value.len() == 4 {
+            Some(u32::from_be_bytes([
+                self.value[0],
+                self.value[1],
+                self.value[2],
+                self.value[3],
+            ]))
+        } else {
+            None
+        }
+    }
     pub fn as_string(&self) -> Option<String> {
-        let bytes = if self.value.last() == Some(&0x00) { &self.value[..self.value.len() - 1] } else { &self.value };
+        let bytes = if self.value.last() == Some(&0x00) {
+            &self.value[..self.value.len() - 1]
+        } else {
+            &self.value
+        };
         String::from_utf8(bytes.to_vec()).ok()
     }
 }
@@ -97,24 +133,60 @@ pub trait TlvList {
 }
 
 impl TlvList for Vec<Tlv> {
-    fn get_tlv(&self, tag: TlvTag) -> Option<&Tlv> { self.iter().find(|t| t.tag == tag as u16) }
-    fn get_tlv_raw(&self, tag: u16) -> Option<&Tlv> { self.iter().find(|t| t.tag == tag) }
-    fn receipted_message_id(&self) -> Option<String> { self.get_tlv(TlvTag::ReceiptedMessageId)?.as_string() }
-    fn message_state(&self) -> Option<u8> { self.get_tlv(TlvTag::MessageStateTlv)?.as_u8() }
+    fn get_tlv(&self, tag: TlvTag) -> Option<&Tlv> {
+        self.iter().find(|t| t.tag == tag as u16)
+    }
+    fn get_tlv_raw(&self, tag: u16) -> Option<&Tlv> {
+        self.iter().find(|t| t.tag == tag)
+    }
+    fn receipted_message_id(&self) -> Option<String> {
+        self.get_tlv(TlvTag::ReceiptedMessageId)?.as_string()
+    }
+    fn message_state(&self) -> Option<u8> {
+        self.get_tlv(TlvTag::MessageStateTlv)?.as_u8()
+    }
     fn network_error_code(&self) -> Option<(u8, u16)> {
         let tlv = self.get_tlv(TlvTag::NetworkErrorCode)?;
-        if tlv.value.len() == 3 { Some((tlv.value[0], u16::from_be_bytes([tlv.value[1], tlv.value[2]]))) } else { None }
+        if tlv.value.len() == 3 {
+            Some((
+                tlv.value[0],
+                u16::from_be_bytes([tlv.value[1], tlv.value[2]]),
+            ))
+        } else {
+            None
+        }
     }
-    fn user_message_reference(&self) -> Option<u16> { self.get_tlv(TlvTag::UserMessageReference)?.as_u16() }
-    fn sar_msg_ref_num(&self) -> Option<u16> { self.get_tlv(TlvTag::SarMsgRefNum)?.as_u16() }
-    fn sar_total_segments(&self) -> Option<u8> { self.get_tlv(TlvTag::SarTotalSegments)?.as_u8() }
-    fn sar_segment_seqnum(&self) -> Option<u8> { self.get_tlv(TlvTag::SarSegmentSeqnum)?.as_u8() }
-    fn message_payload(&self) -> Option<&[u8]> { self.get_tlv(TlvTag::MessagePayload).map(|t| t.value.as_slice()) }
-    fn source_port(&self) -> Option<u16> { self.get_tlv(TlvTag::SourcePort)?.as_u16() }
-    fn destination_port(&self) -> Option<u16> { self.get_tlv(TlvTag::DestinationPort)?.as_u16() }
-    fn sc_interface_version(&self) -> Option<u8> { self.get_tlv(TlvTag::ScInterfaceVersion)?.as_u8() }
-    fn more_messages_to_send(&self) -> Option<u8> { self.get_tlv(TlvTag::MoreMessagesToSend)?.as_u8() }
-    fn delivery_failure_reason(&self) -> Option<u8> { self.get_tlv(TlvTag::DeliveryFailureReason)?.as_u8() }
+    fn user_message_reference(&self) -> Option<u16> {
+        self.get_tlv(TlvTag::UserMessageReference)?.as_u16()
+    }
+    fn sar_msg_ref_num(&self) -> Option<u16> {
+        self.get_tlv(TlvTag::SarMsgRefNum)?.as_u16()
+    }
+    fn sar_total_segments(&self) -> Option<u8> {
+        self.get_tlv(TlvTag::SarTotalSegments)?.as_u8()
+    }
+    fn sar_segment_seqnum(&self) -> Option<u8> {
+        self.get_tlv(TlvTag::SarSegmentSeqnum)?.as_u8()
+    }
+    fn message_payload(&self) -> Option<&[u8]> {
+        self.get_tlv(TlvTag::MessagePayload)
+            .map(|t| t.value.as_slice())
+    }
+    fn source_port(&self) -> Option<u16> {
+        self.get_tlv(TlvTag::SourcePort)?.as_u16()
+    }
+    fn destination_port(&self) -> Option<u16> {
+        self.get_tlv(TlvTag::DestinationPort)?.as_u16()
+    }
+    fn sc_interface_version(&self) -> Option<u8> {
+        self.get_tlv(TlvTag::ScInterfaceVersion)?.as_u8()
+    }
+    fn more_messages_to_send(&self) -> Option<u8> {
+        self.get_tlv(TlvTag::MoreMessagesToSend)?.as_u8()
+    }
+    fn delivery_failure_reason(&self) -> Option<u8> {
+        self.get_tlv(TlvTag::DeliveryFailureReason)?.as_u8()
+    }
 }
 
 fn parse_single_tlv(input: &[u8]) -> IResult<&[u8], Tlv> {
@@ -123,15 +195,27 @@ fn parse_single_tlv(input: &[u8]) -> IResult<&[u8], Tlv> {
     let tag = u16::from_be_bytes([tag_bytes[0], tag_bytes[1]]);
     let length = u16::from_be_bytes([length_bytes[0], length_bytes[1]]);
     let (input, value) = take(length as usize)(input)?;
-    Ok((input, Tlv { tag, value: value.to_vec() }))
+    Ok((
+        input,
+        Tlv {
+            tag,
+            value: value.to_vec(),
+        },
+    ))
 }
 
 pub fn decode_tlvs(mut input: &[u8]) -> Vec<Tlv> {
     let mut tlvs = Vec::new();
     while input.len() >= 4 {
         match parse_single_tlv(input) {
-            Ok((remaining, tlv)) => { tlvs.push(tlv); input = remaining; }
-            Err(_) => { warn!("Failed to parse TLV, {} bytes remaining", input.len()); break; }
+            Ok((remaining, tlv)) => {
+                tlvs.push(tlv);
+                input = remaining;
+            }
+            Err(_) => {
+                warn!("Failed to parse TLV, {} bytes remaining", input.len());
+                break;
+            }
         }
     }
     tlvs
@@ -139,7 +223,9 @@ pub fn decode_tlvs(mut input: &[u8]) -> Vec<Tlv> {
 
 pub fn encode_tlvs(tlvs: &[Tlv]) -> Vec<u8> {
     let mut buf = Vec::new();
-    for tlv in tlvs { buf.extend_from_slice(&tlv.encode()); }
+    for tlv in tlvs {
+        buf.extend_from_slice(&tlv.encode());
+    }
     buf
 }
 
@@ -181,10 +267,14 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_input() { assert!(decode_tlvs(&[]).is_empty()); }
+    fn test_empty_input() {
+        assert!(decode_tlvs(&[]).is_empty());
+    }
 
     #[test]
-    fn test_truncated_tlv_ignored() { assert!(decode_tlvs(&[0x02, 0x04, 0x00]).is_empty()); }
+    fn test_truncated_tlv_ignored() {
+        assert!(decode_tlvs(&[0x02, 0x04, 0x00]).is_empty());
+    }
 
     #[test]
     fn test_unknown_tag_preserved() {
@@ -209,13 +299,19 @@ mod tests {
 
     #[test]
     fn test_network_error_code() {
-        let tlvs = vec![Tlv::from_tag(TlvTag::NetworkErrorCode, vec![0x03, 0x00, 0x1F])];
+        let tlvs = vec![Tlv::from_tag(
+            TlvTag::NetworkErrorCode,
+            vec![0x03, 0x00, 0x1F],
+        )];
         assert_eq!(tlvs.network_error_code(), Some((3, 31)));
     }
 
     #[test]
     fn test_message_payload() {
-        let tlvs = vec![Tlv::from_tag(TlvTag::MessagePayload, b"Hello World".to_vec())];
+        let tlvs = vec![Tlv::from_tag(
+            TlvTag::MessagePayload,
+            b"Hello World".to_vec(),
+        )];
         assert_eq!(tlvs.message_payload(), Some(b"Hello World".as_slice()));
     }
 }
