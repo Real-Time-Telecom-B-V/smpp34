@@ -26,7 +26,7 @@ jobs:
   verify-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cargo version must equal the tag
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
@@ -43,7 +43,7 @@ jobs:
     permissions:
       id-token: write # mint a short-lived crates.io token via GitHub OIDC — no stored secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Authenticate to crates.io (OIDC Trusted Publishing)
@@ -58,7 +58,7 @@ jobs:
     needs: verify-version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-sbom
@@ -67,7 +67,7 @@ jobs:
         run: |
           cargo sbom --output-format spdx_json_2_3 > "smpp34-${GITHUB_REF_NAME}.spdx.json"
           cargo sbom --output-format cyclone_dx_json_1_4 > "smpp34-${GITHUB_REF_NAME}.cdx.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: |
@@ -80,14 +80,14 @@ jobs:
     permissions:
       contents: write # create the release and upload assets
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download SBOMs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
