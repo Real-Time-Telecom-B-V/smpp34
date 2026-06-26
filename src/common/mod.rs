@@ -130,6 +130,10 @@ impl DeliveryReceipt {
 
 }
 
+// SMPP command_id is a 4-octet unsigned integer (SMPP v3.4 §3.2); response
+// IDs set the high bit (0x80000000 | request_id), so an explicit u32 repr is
+// required for the discriminants to be portable to 32-bit targets.
+#[repr(u32)]
 #[derive(Debug, PartialEq, FromPrimitive)]
 pub (crate) enum CommandId {
     generic_nack = 0x80000000,

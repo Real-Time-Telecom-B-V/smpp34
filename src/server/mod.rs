@@ -291,7 +291,7 @@ impl SmppServer {
                                                     Err(error) => {
                                                         error!("Connection from {} on server {}, unable to decode bind_receiver", connection_information.client_address, connection_information.server_address);
                                                         let error = bind_receiver::generic_reject(potential_seq_no, error).encode();
-                                                        stream.write(&error).await.expect("Can not write to stream");
+                                                        stream.write_all(&error).await.expect("Can not write to stream");
                                                     }
                                                 }
                                             } else if header.command_id == CommandId::bind_transmitter as u32 {
@@ -309,7 +309,7 @@ impl SmppServer {
                                                     Err(error) => {
                                                         error!("Connection from {} on server {}, unable to decode bind_receiver", connection_information.client_address, connection_information.server_address);
                                                         let error = bind_transmitter::generic_reject(potential_seq_no, error).encode();
-                                                        stream.write(&error).await.expect("Can not write to stream");
+                                                        stream.write_all(&error).await.expect("Can not write to stream");
                                                     }
                                                 }
                                             } else if header.command_id == CommandId::bind_transceiver as u32 {
@@ -327,7 +327,7 @@ impl SmppServer {
                                                     Err(error) => {
                                                         error!("Connection from {} on server {}, unable to decode bind_receiver", connection_information.client_address, connection_information.server_address);
                                                         let error = bind_transceiver::generic_reject(potential_seq_no, error).encode();
-                                                        stream.write(&error).await.expect("Can not write to stream");
+                                                        stream.write_all(&error).await.expect("Can not write to stream");
                                                     }
                                                 }
                                             } else {
@@ -335,13 +335,13 @@ impl SmppServer {
                                                 error!("Did not expect command_id {} as bind not established yet, sending ESME_RINVBNDSTS in generick_nack", header.command_id);
 
                                                 let generic_nack = generic_nack::new(SmppError::ESME_RINVBNDSTS, potential_seq_no);
-                                                stream.write(&generic_nack.encode()).await.expect("Can not write to stream");
+                                                stream.write_all(&generic_nack.encode()).await.expect("Can not write to stream");
                                             }
                                         },
                                         Err(error) => {
                                             error!("Unable to decode command_header for PDU, sending {:?} in generic_nack", error); 
                                             let generic_nack = generic_nack::new(error, potential_seq_no);
-                                            stream.write(&generic_nack.encode()).await.expect("Can not write to stream");
+                                            stream.write_all(&generic_nack.encode()).await.expect("Can not write to stream");
                                         } 
                                     }
                                 }, _ => {

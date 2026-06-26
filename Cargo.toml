@@ -29,3 +29,9 @@ features = [
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
 ]
+
+[lints.clippy]
+# Bug-catching tier denied; style/dead-code stay at default warn. Runner: scripts/clippy.sh
+correctness = { level = "deny", priority = -1 }
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"

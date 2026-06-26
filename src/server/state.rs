@@ -576,7 +576,7 @@ impl OPEN {
             }
         } else {
             error!("Connection from {} on server {} with system_id {} was rejected with error {:?}, closing TCP connection", connection_information.client_address, connection_information.server_address, bind_transceiver.system_id, bind_transceiver_resp.get_error()) ;
-            stream.write(&bind_transceiver_resp.clone().encode()).await.expect("Unable to write to TCP socket");
+            stream.write_all(&bind_transceiver_resp.clone().encode()).await.expect("Unable to write to TCP socket");
             Err(bind_transceiver_resp.get_error())
         }
     }
