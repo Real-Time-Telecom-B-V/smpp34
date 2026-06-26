@@ -42,7 +42,7 @@ impl generic_nack {
     ///
     /// * `header` - already decoded Command Header which is only used for validation as generic_nack should not have a body
     /// * `pdu` - the complete PDU used for extra validation
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<generic_nack, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<generic_nack, SmppError> {
         if header.command_id == CommandId::generic_nack as u32 {
             if pdu.len() == 16 {
                 Ok(generic_nack { header })

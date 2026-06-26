@@ -36,9 +36,9 @@ cargo add smpp34
 
 ## Quick start — server
 
-Implement `SmppServerListener` and hand it to an `SmppServer`. (The trait has
-one method per inbound PDU; the snippet below shows the common ones — see the
-crate docs for the full set.)
+Implement `SmppServerListener` and hand it to an `SmppServer`. Every trait
+method has a default, so you override only the PDUs you care about — typically
+`on_bind_transceiver` and `on_submit_sm`.
 
 ```rust,no_run
 use std::sync::Arc;
@@ -70,8 +70,9 @@ impl SmppServerListener for MyEsmeHandler {
         req.accept("message-id-1".to_string())
     }
 
-    // The trait also requires: on_bind_transmitter, on_bind_receiver, on_unbind,
-    // on_data_sm, on_cancel_sm, on_timeout, on_esme_bound, on_esme_unbound.
+    // Every other method has a sensible default (binds reject, on_data_sm /
+    // on_cancel_sm reject, on_unbind acks, notifications no-op), so you override
+    // only what you need.
 }
 
 #[tokio::main]
@@ -105,10 +106,12 @@ let mut client = SmppClient::new(
     /* window_size */ 20,
 );
 client.start().await;
-// inside on_smsc_bound(smsc, _):
-//   smsc.send_submit_sm("", 1, 1, "12345".into(), 1, 1, "31600000000".into(),
-//                       0, 0, 0, "".into(), "".into(), 0, 0, 0, 0,
-//                       b"hello".to_vec()).await?;
+// inside on_smsc_bound(smsc, _): use the fluent builder (only set what you need)
+//   smsc.submit_sm()
+//       .source_addr("12345")
+//       .destination_addr("31600000000")
+//       .short_message(b"hello")
+//       .send().await?;
 ```
 
 ## TLS
@@ -131,9 +134,10 @@ Rust **1.80**.
 ## Stability
 
 The SMPP 3.4 codec and the client/server session handling are used in
-production. Until a `1.0` release the public API may still see ergonomic
-refinement — pin a minor version if you need stability across `0.x` bumps. See
-[`VERSIONING.md`](VERSIONING.md).
+production, and the crate follows [Semantic Versioning](VERSIONING.md): the
+public Rust API is the contract. The 17-argument `send_submit_sm` /
+`send_deliver_sm` remain available, but the `submit_sm()` / `deliver_sm()`
+builders are the recommended way to send.
 
 ## License
 

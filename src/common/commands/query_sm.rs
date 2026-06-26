@@ -35,7 +35,7 @@ impl query_sm {
         }
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<query_sm, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<query_sm, SmppError> {
         if pdu.len() < 16 {
             return Err(SmppError::ESME_RINVCMDLEN);
         }
@@ -146,7 +146,7 @@ impl query_sm_resp {
             .expect("Can not convert command_status to SmppError")
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<query_sm_resp, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<query_sm_resp, SmppError> {
         if header.command_status != SmppError::ESME_ROK as u32 {
             return Ok(query_sm_resp {
                 header,

@@ -130,7 +130,7 @@ impl deliver_sm {
         }
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<deliver_sm, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<deliver_sm, SmppError> {
         if pdu.len() < 16 {
             return Err(SmppError::ESME_RINVCMDLEN);
         }
@@ -322,7 +322,7 @@ impl deliver_sm_resp {
         buffer
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<deliver_sm_resp, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<deliver_sm_resp, SmppError> {
         if header.command_status != SmppError::ESME_ROK as u32 {
             return Ok(deliver_sm_resp {
                 header,

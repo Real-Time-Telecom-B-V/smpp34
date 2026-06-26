@@ -57,6 +57,12 @@ impl ESME {
         self.sequence_number.fetch_add(1, Ordering::SeqCst)
     }
 
+    /// Start building a `deliver_sm` to send on this session — an ergonomic
+    /// alternative to the 17-argument [`send_deliver_sm`](ESME::send_deliver_sm).
+    pub fn deliver_sm(&self) -> DeliverSmBuilder<'_> {
+        DeliverSmBuilder::new(self)
+    }
+
     pub async fn send_deliver_sm(
         &self,
         service_type: String,
@@ -356,61 +362,240 @@ impl ESME {
     }
 }
 
+/// Fluent builder for a `deliver_sm`, returned by [`ESME::deliver_sm`].
+///
+/// Every field defaults to `0` / empty, so set only what you need and then call
+/// [`send`](DeliverSmBuilder::send). String setters take `impl Into<String>` and
+/// `short_message` takes `impl Into<Vec<u8>>`.
+///
+/// ```ignore
+/// esme.deliver_sm()
+///     .source_addr("31600000000")
+///     .destination_addr("12345")
+///     .short_message(b"hello")
+///     .send()
+///     .await?;
+/// ```
+pub struct DeliverSmBuilder<'a> {
+    esme: &'a ESME,
+    service_type: String,
+    source_addr_ton: u8,
+    source_addr_npi: u8,
+    source_addr: String,
+    dest_addr_ton: u8,
+    dest_addr_npi: u8,
+    destination_addr: String,
+    esm_class: u8,
+    protocol_id: u8,
+    priority_flag: u8,
+    schedule_delivery_time: String,
+    validity_period: String,
+    registered_delivery: u8,
+    replace_if_present_flag: u8,
+    data_coding: u8,
+    sm_default_msg_id: u8,
+    short_message: Vec<u8>,
+}
+
+impl<'a> DeliverSmBuilder<'a> {
+    fn new(esme: &'a ESME) -> Self {
+        DeliverSmBuilder {
+            esme,
+            service_type: String::new(),
+            source_addr_ton: 0,
+            source_addr_npi: 0,
+            source_addr: String::new(),
+            dest_addr_ton: 0,
+            dest_addr_npi: 0,
+            destination_addr: String::new(),
+            esm_class: 0,
+            protocol_id: 0,
+            priority_flag: 0,
+            schedule_delivery_time: String::new(),
+            validity_period: String::new(),
+            registered_delivery: 0,
+            replace_if_present_flag: 0,
+            data_coding: 0,
+            sm_default_msg_id: 0,
+            short_message: Vec::new(),
+        }
+    }
+
+    pub fn service_type(mut self, v: impl Into<String>) -> Self {
+        self.service_type = v.into();
+        self
+    }
+    pub fn source_addr_ton(mut self, v: u8) -> Self {
+        self.source_addr_ton = v;
+        self
+    }
+    pub fn source_addr_npi(mut self, v: u8) -> Self {
+        self.source_addr_npi = v;
+        self
+    }
+    pub fn source_addr(mut self, v: impl Into<String>) -> Self {
+        self.source_addr = v.into();
+        self
+    }
+    pub fn dest_addr_ton(mut self, v: u8) -> Self {
+        self.dest_addr_ton = v;
+        self
+    }
+    pub fn dest_addr_npi(mut self, v: u8) -> Self {
+        self.dest_addr_npi = v;
+        self
+    }
+    pub fn destination_addr(mut self, v: impl Into<String>) -> Self {
+        self.destination_addr = v.into();
+        self
+    }
+    pub fn esm_class(mut self, v: u8) -> Self {
+        self.esm_class = v;
+        self
+    }
+    pub fn protocol_id(mut self, v: u8) -> Self {
+        self.protocol_id = v;
+        self
+    }
+    pub fn priority_flag(mut self, v: u8) -> Self {
+        self.priority_flag = v;
+        self
+    }
+    pub fn schedule_delivery_time(mut self, v: impl Into<String>) -> Self {
+        self.schedule_delivery_time = v.into();
+        self
+    }
+    pub fn validity_period(mut self, v: impl Into<String>) -> Self {
+        self.validity_period = v.into();
+        self
+    }
+    pub fn registered_delivery(mut self, v: u8) -> Self {
+        self.registered_delivery = v;
+        self
+    }
+    pub fn replace_if_present_flag(mut self, v: u8) -> Self {
+        self.replace_if_present_flag = v;
+        self
+    }
+    pub fn data_coding(mut self, v: u8) -> Self {
+        self.data_coding = v;
+        self
+    }
+    pub fn sm_default_msg_id(mut self, v: u8) -> Self {
+        self.sm_default_msg_id = v;
+        self
+    }
+    pub fn short_message(mut self, v: impl Into<Vec<u8>>) -> Self {
+        self.short_message = v.into();
+        self
+    }
+
+    /// Send the assembled `deliver_sm` on the session and await its response.
+    pub async fn send(self) -> Result<deliver_sm_resp, SmppError> {
+        self.esme
+            .send_deliver_sm(
+                self.service_type,
+                self.source_addr_ton,
+                self.source_addr_npi,
+                self.source_addr,
+                self.dest_addr_ton,
+                self.dest_addr_npi,
+                self.destination_addr,
+                self.esm_class,
+                self.protocol_id,
+                self.priority_flag,
+                self.schedule_delivery_time,
+                self.validity_period,
+                self.registered_delivery,
+                self.replace_if_present_flag,
+                self.data_coding,
+                self.sm_default_msg_id,
+                self.short_message,
+            )
+            .await
+    }
+}
+
 #[async_trait]
+/// Callbacks for a server (SMSC) session.
+///
+/// Every method has a default implementation, so an implementor only overrides
+/// the ones it needs. Binds default to `reject(ESME_RBINDFAIL)`, `on_submit_sm`
+/// / `on_data_sm` to `reject(ESME_RSYSERR)`, `on_cancel_sm` to
+/// `reject(ESME_RCANCELFAIL)`, `on_unbind` to acking, and the notification hooks
+/// to a no-op. Override `on_bind_transceiver` + `on_submit_sm` for a typical SMSC.
+// `session_id: &String` stays `&String` on these trait methods: switching to
+// `&str` would break every existing impl's signature, so it is deferred to a
+// future major release.
+#[allow(clippy::ptr_arg)]
 pub trait SmppServerListener {
     async fn on_bind_transmitter(
         &self,
         bind_transmitter: bind_transmitter,
-        connection_information: &SmppConnectionInformation,
-        session_id: &String,
-    ) -> bind_transmitter_resp;
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> bind_transmitter_resp {
+        bind_transmitter.reject(SmppError::ESME_RBINDFAIL)
+    }
     async fn on_bind_receiver(
         &self,
         bind_receiver: bind_receiver,
-        connection_information: &SmppConnectionInformation,
-        session_id: &String,
-    ) -> bind_receiver_resp;
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> bind_receiver_resp {
+        bind_receiver.reject(SmppError::ESME_RBINDFAIL)
+    }
     async fn on_bind_transceiver(
         &self,
         bind_transceiver: bind_transceiver,
-        connection_information: &SmppConnectionInformation,
-        session_id: &String,
-    ) -> bind_transceiver_resp;
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> bind_transceiver_resp {
+        bind_transceiver.reject(SmppError::ESME_RBINDFAIL)
+    }
     async fn on_unbind(
         &self,
         unbind: unbind,
-        connection_information: &SmppConnectionInformation,
-        session_id: &String,
-    ) -> unbind_resp;
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> unbind_resp {
+        unbind.accept()
+    }
     async fn on_submit_sm(
         &self,
         submit_sm: submit_sm,
-        connection_information: &SmppConnectionInformation,
-        session_id: &String,
-    ) -> submit_sm_resp;
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> submit_sm_resp {
+        submit_sm.reject(SmppError::ESME_RSYSERR)
+    }
     async fn on_cancel_sm(
         &self,
         cancel_sm: cancel_sm,
-        connection_information: &SmppConnectionInformation,
-        session_id: &String,
-    ) -> cancel_sm_resp;
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> cancel_sm_resp {
+        cancel_sm.reject(SmppError::ESME_RCANCELFAIL)
+    }
     async fn on_data_sm(
         &self,
         data_sm: data_sm,
-        connection_information: &SmppConnectionInformation,
-        session_id: &String,
-    ) -> data_sm_resp;
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> data_sm_resp {
+        data_sm.reject(SmppError::ESME_RSYSERR)
+    }
 
     /// Notification sent when an SMPP command timed-out (respone_timer triggered)
-    async fn on_timeout(&self, sequence_number: u32, session_id: &String);
+    async fn on_timeout(&self, _sequence_number: u32, _session_id: &String) {}
 
     /// Notification sent when an ESME is in bound state and is ready for receiving commands.
     /// The ESME wraps the MPSC channel towards the writer thread of the bind
-    async fn on_esme_bound(&self, esme: ESME, session_id: &String);
+    async fn on_esme_bound(&self, _esme: ESME, _session_id: &String) {}
 
     /// Notification sent when the ESME has become unavailable due to a bind being closed or transport error
     /// It is up to the user of this listener to drop the ESME received on the on_esme_bound notificiation, any attempt to write to the ESME after will result in a panic as the MSPC channel is closed
-    async fn on_esme_unbound(&self, session_id: &String);
+    async fn on_esme_unbound(&self, _session_id: &String) {}
 }
 
 impl SmppServer {
@@ -724,5 +909,21 @@ impl Drop for SmppServer {
         if self.alive.load(Ordering::SeqCst) {
             futures::executor::block_on(self.stop());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Compiles only because every `SmppServerListener` method has a default —
+    // this empty impl is the proof that the defaults exist.
+    struct MinimalServer;
+    #[async_trait]
+    impl SmppServerListener for MinimalServer {}
+
+    #[test]
+    fn minimal_server_listener_compiles() {
+        let _listener: &dyn SmppServerListener = &MinimalServer;
     }
 }

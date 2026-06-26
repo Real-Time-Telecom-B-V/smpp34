@@ -63,7 +63,7 @@ pub struct CommandHeader {
 }
 
 impl CommandHeader {
-    pub fn decode(pdu: &Vec<u8>) -> Result<CommandHeader, SmppError> {
+    pub fn decode(pdu: &[u8]) -> Result<CommandHeader, SmppError> {
         if pdu.len() < 16 {
             // PDU Command Header is mandatory, we need at least 16 bytes
             error!("PDU can not contain a valid SMPP header as it's shorter than 16 bytes");
@@ -356,7 +356,7 @@ pub(crate) fn parse_c_octet_string_nom(input: &[u8]) -> IResult<&[u8], String> {
 
 fn decode_bind_request(
     header: CommandHeader,
-    pdu: &Vec<u8>,
+    pdu: &[u8],
 ) -> Result<CommonBindRequestParameters, SmppError> {
     if pdu.len() < 16 {
         return Err(SmppError::ESME_RINVCMDLEN);

@@ -67,7 +67,7 @@ impl bind_receiver {
         }
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<bind_receiver, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<bind_receiver, SmppError> {
         let result = decode_bind_request(header, pdu)?;
         Ok(bind_receiver {
             header: result.header,
@@ -156,7 +156,7 @@ impl bind_receiver_resp {
             .expect("Can not convert command_status to SmppError")
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<bind_receiver_resp, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<bind_receiver_resp, SmppError> {
         if header.command_status != SmppError::ESME_ROK as u32 {
             return Ok(bind_receiver_resp {
                 header,
