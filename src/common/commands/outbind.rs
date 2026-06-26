@@ -1,6 +1,6 @@
 use log::error;
 
-use crate::{CommandHeader, SmppError, CommandId, common::parse_c_octet_string};
+use crate::{common::parse_c_octet_string, CommandHeader, CommandId, SmppError};
 
 /// The purpose of the outbind operation is to allow the SMSC signal an ESME to originate a
 /// bind_receiver request to the SMSC. An example of where such a facility might be applicable
@@ -19,33 +19,42 @@ use crate::{CommandHeader, SmppError, CommandId, common::parse_c_octet_string};
 pub struct outbind {
     header: CommandHeader,
     system_id: String,
-    password: String
+    password: String,
 }
 
 impl outbind {
-
     /// Construct a outbind primitive
-    /// 
+    ///
     /// # Arguments
-    /// 
-    /// * `seq_no` - sequence number 
+    ///
+    /// * `seq_no` - sequence number
     /// * `system_id` - system_id to set in the outbind (may be empty)
     /// * `password` - password to set in the outbind (may be empty)
     pub fn new(seq_no: u32, system_id: String, password: String) -> outbind {
-        outbind { header: CommandHeader { command_length: (16 + system_id.len() + password.len() + 2) as u32, command_id: CommandId::outbind as u32, command_status: SmppError::ESME_ROK as u32, sequence_number: seq_no }, system_id, password }
+        outbind {
+            header: CommandHeader {
+                command_length: (16 + system_id.len() + password.len() + 2) as u32,
+                command_id: CommandId::outbind as u32,
+                command_status: SmppError::ESME_ROK as u32,
+                sequence_number: seq_no,
+            },
+            system_id,
+            password,
+        }
     }
 
     /// Decode a outbind PDU
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `header` - already decoded Command Header which is only used for validation as outbind should not have a body
     /// * `pdu` - the complete PDU used for extra validation
     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<outbind, SmppError> {
         if header.command_id == CommandId::outbind as u32 {
-            if pdu.len() >= 18 { // We expect a body of 2 C-Octet-Strings which may be empty
+            if pdu.len() >= 18 {
+                // We expect a body of 2 C-Octet-Strings which may be empty
                 // CommondHeader decode method makes sure that PDU length matches the command_length so no need to check this again
-    
+
                 // First we expect the system_id which is a C-Octet-String terminated by 0 and maximum 16 in length
                 let system_id = parse_c_octet_string(pdu[16..].to_vec(), 16)?;
 
@@ -53,15 +62,19 @@ impl outbind {
                 let password = parse_c_octet_string(pdu[16 + system_id.len() + 1..].to_vec(), 9)?;
 
                 Ok(outbind {
-                    header, system_id, password
+                    header,
+                    system_id,
+                    password,
                 })
             } else {
                 Err(SmppError::ESME_RINVPARLEN) // outbind should have command header + a minimum of 2 NULL bytes as system_id and password are C-Octet-String which may be empty to provide passwordless authentication
             }
-        }
-        else {
-            error!("Passed a non outbind PDU to outbind::decode(), command_id: 0x{:08X}", header.command_id);
-            return Err(SmppError::ESME_RINVCMDID)
+        } else {
+            error!(
+                "Passed a non outbind PDU to outbind::decode(), command_id: 0x{:08X}",
+                header.command_id
+            );
+            Err(SmppError::ESME_RINVCMDID)
         }
     }
 
@@ -72,7 +85,8 @@ impl outbind {
         } else if self.password.len() > 9 {
             panic!("password can only be 9 digits long")
         } else {
-            let mut buffer: Vec<u8> = Vec::with_capacity(16 + self.system_id.len() + self.password.len() + 2); // Length of two C-Octet-Strings including NULL terminators
+            let mut buffer: Vec<u8> =
+                Vec::with_capacity(16 + self.system_id.len() + self.password.len() + 2); // Length of two C-Octet-Strings including NULL terminators
             buffer.append(&mut self.header.encode());
             buffer.append(&mut self.system_id.as_bytes().to_vec());
             buffer.push(0x00);
@@ -85,7 +99,7 @@ impl outbind {
 
 #[cfg(test)]
 mod outbind_tests {
-    use crate::{outbind, CommandId, SmppError, CommandHeader};
+    use crate::{outbind, CommandHeader, CommandId, SmppError};
 
     #[test]
     fn new_outbind() {
@@ -102,14 +116,25 @@ mod outbind_tests {
     fn encode_outbind() {
         let outbind = outbind::new(0x1234, "abc".to_owned(), "123".to_owned());
         let pdu = outbind.encode();
-        assert_eq!(pdu, vec![0x00, 0x0, 0x00, 0x18, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x61, 0x62, 0x63, 0x00, 0x31, 0x32, 0x33, 0x00]);
+        assert_eq!(
+            pdu,
+            vec![
+                0x00, 0x0, 0x00, 0x18, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x12, 0x34, 0x61, 0x62, 0x63, 0x00, 0x31, 0x32, 0x33, 0x00
+            ]
+        );
     }
 
     #[test]
     fn decode_outbind() {
-        let pdu = vec![0x00, 0x0, 0x00, 0x18, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x61, 0x62, 0x63, 0x00, 0x31, 0x32, 0x33, 0x00];
-        let decoded_command_header = CommandHeader::decode(&pdu).expect("Can not decode command header");
-        let decoded = outbind::decode(decoded_command_header, &pdu).expect("Unable to decode outbind");
+        let pdu = vec![
+            0x00, 0x0, 0x00, 0x18, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x12, 0x34, 0x61, 0x62, 0x63, 0x00, 0x31, 0x32, 0x33, 0x00,
+        ];
+        let decoded_command_header =
+            CommandHeader::decode(&pdu).expect("Can not decode command header");
+        let decoded =
+            outbind::decode(decoded_command_header, &pdu).expect("Unable to decode outbind");
 
         assert_eq!(decoded.header.command_length, 24);
         assert_eq!(decoded.header.command_id, CommandId::outbind as u32);
@@ -121,9 +146,14 @@ mod outbind_tests {
 
     #[test]
     fn decode_outbind_empty_system_id_and_password() {
-        let pdu = vec![0x00, 0x0, 0x00, 0x12, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x00, 0x00];
-        let decoded_command_header = CommandHeader::decode(&pdu).expect("Can not decode command header");
-        let decoded = outbind::decode(decoded_command_header, &pdu).expect("Unable to decode outbind");
+        let pdu = vec![
+            0x00, 0x0, 0x00, 0x12, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x12, 0x34, 0x00, 0x00,
+        ];
+        let decoded_command_header =
+            CommandHeader::decode(&pdu).expect("Can not decode command header");
+        let decoded =
+            outbind::decode(decoded_command_header, &pdu).expect("Unable to decode outbind");
 
         assert_eq!(decoded.header.command_length, 18);
         assert_eq!(decoded.header.command_id, CommandId::outbind as u32);
@@ -135,16 +165,24 @@ mod outbind_tests {
 
     #[test]
     fn decode_outbind_without_body() {
-        let pdu = vec![0x00, 0x0, 0x00, 0x10, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34];
-        let decoded_command_header = CommandHeader::decode(&pdu).expect("Can not decode command header");
+        let pdu = vec![
+            0x00, 0x0, 0x00, 0x10, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x12, 0x34,
+        ];
+        let decoded_command_header =
+            CommandHeader::decode(&pdu).expect("Can not decode command header");
         let decoded = outbind::decode(decoded_command_header, &pdu).unwrap_err();
         assert_eq!(decoded, SmppError::ESME_RINVPARLEN)
     }
 
     #[test]
     fn decode_outbind_with_invalid_command_id() {
-        let pdu = vec![0x00, 0x0, 0x00, 0x18, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34, 0x61, 0x62, 0x63, 0x00, 0x31, 0x32, 0x33, 0x00];
-        let decoded_command_header = CommandHeader::decode(&pdu).expect("Can not decode command header");
+        let pdu = vec![
+            0x00, 0x0, 0x00, 0x18, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x12, 0x34, 0x61, 0x62, 0x63, 0x00, 0x31, 0x32, 0x33, 0x00,
+        ];
+        let decoded_command_header =
+            CommandHeader::decode(&pdu).expect("Can not decode command header");
         let result = outbind::decode(decoded_command_header, &pdu);
         assert!(result.is_err());
     }

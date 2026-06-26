@@ -1,7 +1,7 @@
-use nom::bytes::complete::take;
-use num_traits::FromPrimitive;
 use crate::common::parse_c_octet_string_nom;
 use crate::{CommandHeader, CommandId, SmppError, SmppReply};
+use nom::bytes::complete::take;
+use num_traits::FromPrimitive;
 
 #[derive(Debug, Clone)]
 pub struct query_sm {
@@ -13,7 +13,13 @@ pub struct query_sm {
 }
 
 impl query_sm {
-    pub fn new(sequence_number: u32, message_id: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String) -> query_sm {
+    pub fn new(
+        sequence_number: u32,
+        message_id: String,
+        source_addr_ton: u8,
+        source_addr_npi: u8,
+        source_addr: String,
+    ) -> query_sm {
         let cmd_len = (16 + message_id.len() + 1 + 1 + 1 + source_addr.len() + 1) as u32;
         query_sm {
             header: CommandHeader {
@@ -34,10 +40,16 @@ impl query_sm {
             return Err(SmppError::ESME_RINVCMDLEN);
         }
         let input = &pdu[16..];
-        let (input, message_id) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, source_addr_ton_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, source_addr_npi_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (_input, source_addr) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, message_id) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, source_addr_ton_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, source_addr_npi_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (_input, source_addr) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
 
         Ok(query_sm {
             header,
@@ -60,7 +72,13 @@ impl query_sm {
         buffer
     }
 
-    pub fn accept(self, message_id: String, final_date: String, message_state: u8, error_code: u8) -> query_sm_resp {
+    pub fn accept(
+        self,
+        message_id: String,
+        final_date: String,
+        message_state: u8,
+        error_code: u8,
+    ) -> query_sm_resp {
         let cmd_len = (16 + message_id.len() + 1 + final_date.len() + 1 + 1 + 1) as u32;
         query_sm_resp {
             header: CommandHeader {
@@ -117,9 +135,16 @@ pub struct query_sm_resp {
 }
 
 impl query_sm_resp {
-    pub fn is_success(&self) -> bool { self.header.command_status == SmppError::ESME_ROK as u32 }
-    pub fn command_status(&self) -> u32 { self.header.command_status }
-    pub fn get_error(&self) -> SmppError { FromPrimitive::from_u32(self.header.command_status).expect("Can not convert command_status to SmppError") }
+    pub fn is_success(&self) -> bool {
+        self.header.command_status == SmppError::ESME_ROK as u32
+    }
+    pub fn command_status(&self) -> u32 {
+        self.header.command_status
+    }
+    pub fn get_error(&self) -> SmppError {
+        FromPrimitive::from_u32(self.header.command_status)
+            .expect("Can not convert command_status to SmppError")
+    }
 
     pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<query_sm_resp, SmppError> {
         if header.command_status != SmppError::ESME_ROK as u32 {
@@ -135,10 +160,16 @@ impl query_sm_resp {
             return Err(SmppError::ESME_RINVPARLEN);
         }
         let input = &pdu[16..];
-        let (input, message_id) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, final_date) = parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (input, message_state_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
-        let (_input, error_code_bytes) = take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, message_id) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, final_date) =
+            parse_c_octet_string_nom(input).map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (input, message_state_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
+        let (_input, error_code_bytes) =
+            take::<usize, &[u8], nom::error::Error<&[u8]>>(1usize)(input)
+                .map_err(|_| SmppError::ESME_RINVPARLEN)?;
 
         Ok(query_sm_resp {
             header,

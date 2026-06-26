@@ -1,21 +1,43 @@
 use core::fmt;
-use std::{collections::HashMap, net::SocketAddr, sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc}, time::{Duration, Instant, SystemTime}};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant, SystemTime},
+};
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use log::{info, error};
-use tokio::{io::{self, split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, net::TcpStream, sync::{mpsc::{channel, Sender}, oneshot, Mutex}, task::JoinHandle, time::{interval, timeout}};
+use log::{error, info};
+use tokio::{
+    io::{self, split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::TcpStream,
+    sync::{
+        mpsc::{channel, Sender},
+        oneshot, Mutex,
+    },
+    task::JoinHandle,
+    time::{interval, timeout},
+};
 
 use tokio_native_tls::{native_tls, TlsConnector, TlsStream};
 use uuid::Uuid;
 
-use crate::{CommandHeader, CommandId, SmppConnectionInformation, SmppError, SmppReply, WriteFrame, alert_notification, bind_receiver, bind_transceiver, bind_transmitter, cancel_sm, cancel_sm_resp, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, enquire_link, generic_nack, submit_sm, submit_sm_resp, unbind, unbind_resp};
+use crate::{
+    alert_notification, bind_receiver, bind_transceiver, bind_transmitter, cancel_sm,
+    cancel_sm_resp, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, enquire_link, generic_nack,
+    submit_sm, submit_sm_resp, unbind, unbind_resp, CommandHeader, CommandId,
+    SmppConnectionInformation, SmppError, SmppReply, WriteFrame,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BIND_TYPE {
     RX,
     TX,
-    TRX
+    TRX,
 }
 
 impl fmt::Display for BIND_TYPE {
@@ -58,21 +80,69 @@ pub struct SMSC {
 }
 
 impl SMSC {
-    
     fn next_sequence_number(&self) -> u32 {
         self.sequence_number.fetch_add(1, Ordering::SeqCst)
     }
 
-    pub async fn send_submit_sm(&self, service_type: String, source_addr_ton: u8, source_addr_npi: u8, source_addr: String, dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, protocol_id: u8, priority_flag: u8, schedule_delivery_time: String, validity_period: String, registered_delivery: u8, replace_if_present_flag: u8, data_coding: u8, sm_default_msg_id: u8, short_message: Vec<u8>) -> Result<submit_sm_resp, SmppError> {
+    pub async fn send_submit_sm(
+        &self,
+        service_type: String,
+        source_addr_ton: u8,
+        source_addr_npi: u8,
+        source_addr: String,
+        dest_addr_ton: u8,
+        dest_addr_npi: u8,
+        destination_addr: String,
+        esm_class: u8,
+        protocol_id: u8,
+        priority_flag: u8,
+        schedule_delivery_time: String,
+        validity_period: String,
+        registered_delivery: u8,
+        replace_if_present_flag: u8,
+        data_coding: u8,
+        sm_default_msg_id: u8,
+        short_message: Vec<u8>,
+    ) -> Result<submit_sm_resp, SmppError> {
         if self.can_send {
             let sequence_number = self.next_sequence_number();
-            let submit_sm = submit_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, protocol_id, priority_flag, schedule_delivery_time, validity_period, registered_delivery, replace_if_present_flag, data_coding, sm_default_msg_id, short_message);
-            info!("[{} on server {}] sending submit_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
+            let submit_sm = submit_sm::new(
+                sequence_number,
+                service_type,
+                source_addr_ton,
+                source_addr_npi,
+                source_addr,
+                dest_addr_ton,
+                dest_addr_npi,
+                destination_addr,
+                esm_class,
+                protocol_id,
+                priority_flag,
+                schedule_delivery_time,
+                validity_period,
+                registered_delivery,
+                replace_if_present_flag,
+                data_coding,
+                sm_default_msg_id,
+                short_message,
+            );
+            info!(
+                "[{} on server {}] sending submit_sm with sequence_number {}",
+                self.client_address, self.server_address, sequence_number
+            );
 
             let (tx, rx) = oneshot::channel();
 
-            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: submit_sm.encode(), oneshot: Some(tx) }).await {
-                Ok(_) => {},
+            match self
+                .tx_channel
+                .send(WriteFrame {
+                    our_sequence_number: Some(sequence_number),
+                    pdu: submit_sm.encode(),
+                    oneshot: Some(tx),
+                })
+                .await
+            {
+                Ok(_) => {}
                 Err(e) => {
                     error!("[{} on server {}] unable to send submit_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
                     return Err(SmppError::ESME_RSYSERR);
@@ -84,41 +154,63 @@ impl SMSC {
             match response {
                 Ok(Ok(response)) => {
                     // response can be either submit_sm_resp or generic_nack
-                    if let Some(submit_sm_resp) = response.as_any().downcast_ref::<submit_sm_resp>() {
-                        info!("[{} on server {}] received submit_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                        return Ok(submit_sm_resp.clone());
-                    } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                    if let Some(submit_sm_resp) = response.as_any().downcast_ref::<submit_sm_resp>()
+                    {
+                        info!(
+                            "[{} on server {}] received submit_sm_resp with sequence_number {}",
+                            self.client_address, self.server_address, sequence_number
+                        );
+                        Ok(submit_sm_resp.clone())
+                    } else if let Some(generic_nack) =
+                        response.as_any().downcast_ref::<generic_nack>()
+                    {
                         error!("[{} on server {}] received generic_nack in response to submit_sm with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack);
-                        return Err(generic_nack.get_error());
+                        Err(generic_nack.get_error())
                     } else {
                         error!("[{} on server {}] received unknown response to submit_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
-                        return Err(SmppError::ESME_RSYSERR);
+                        Err(SmppError::ESME_RSYSERR)
                     }
-                },
+                }
                 Ok(Err(e)) => {
-                    error!("[{} on server {}] unable to receive submit_sm_resp: {}", self.client_address, self.server_address, e);
+                    error!(
+                        "[{} on server {}] unable to receive submit_sm_resp: {}",
+                        self.client_address, self.server_address, e
+                    );
                     Err(SmppError::ESME_RSYSERR)
-                },
+                }
                 Err(_) => {
-                    error!("[{} on server {}] submit_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                    error!(
+                        "[{} on server {}] submit_sm_resp with sequence_number {} timed out",
+                        self.client_address, self.server_address, sequence_number
+                    );
                     Err(SmppError::ESME_RSYSERR)
                 }
             }
-
         } else {
             panic!("Can not send deliver_sm on non RX/TRX bind");
         }
     }
-    
+
     pub async fn send_unbind(&self) -> Result<unbind_resp, SmppError> {
         let sequence_number = self.next_sequence_number();
-        let unbind = unbind::with_sequence_number(sequence_number.clone());
-        info!("[{} on server {}] sending unbind with sequence_number {}", self.client_address, self.server_address, sequence_number);
+        let unbind = unbind::with_sequence_number(sequence_number);
+        info!(
+            "[{} on server {}] sending unbind with sequence_number {}",
+            self.client_address, self.server_address, sequence_number
+        );
 
         let (tx, rx) = oneshot::channel();
 
-        match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: unbind.encode(), oneshot: Some(tx) }).await {
-            Ok(_) => {},
+        match self
+            .tx_channel
+            .send(WriteFrame {
+                our_sequence_number: Some(sequence_number),
+                pdu: unbind.encode(),
+                oneshot: Some(tx),
+            })
+            .await
+        {
+            Ok(_) => {}
             Err(e) => {
                 error!("[{} on server {}] unable to send unbind with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
                 return Err(SmppError::ESME_RSYSERR);
@@ -130,37 +222,82 @@ impl SMSC {
             Ok(Ok(response)) => {
                 // response can be either unbind_resp or generic_nack
                 if let Some(unbind_resp) = response.as_any().downcast_ref::<unbind_resp>() {
-                    info!("[{} on server {}] received unbind_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                    info!(
+                        "[{} on server {}] received unbind_resp with sequence_number {}",
+                        self.client_address, self.server_address, sequence_number
+                    );
                     Ok(unbind_resp.clone())
-                } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>()
+                {
                     error!("[{} on server {}] received generic_nack in response to unbind with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack);
                     Err(generic_nack.get_error())
                 } else {
                     error!("[{} on server {}] received unknown response to unbind with sequence_number {}", self.client_address, self.server_address, sequence_number);
                     Err(SmppError::ESME_RSYSERR)
                 }
-            },
+            }
             Ok(Err(e)) => {
-                error!("[{} on server {}] unable to receive unbind_resp: {}", self.client_address, self.server_address, e);
+                error!(
+                    "[{} on server {}] unable to receive unbind_resp: {}",
+                    self.client_address, self.server_address, e
+                );
                 Err(SmppError::ESME_RSYSERR)
-            },
+            }
             Err(_) => {
-                error!("[{} on server {}] unbind_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                error!(
+                    "[{} on server {}] unbind_resp with sequence_number {} timed out",
+                    self.client_address, self.server_address, sequence_number
+                );
                 Err(SmppError::ESME_RSYSERR)
             }
         }
     }
 
-    pub async fn send_data_sm(&self, service_type: String, source_addr_ton: u8,  source_addr_npi: u8, source_addr: String,  dest_addr_ton: u8, dest_addr_npi: u8, destination_addr: String, esm_class: u8, registered_delivery: u8, data_coding: u8) -> Result<data_sm_resp, SmppError> {
+    pub async fn send_data_sm(
+        &self,
+        service_type: String,
+        source_addr_ton: u8,
+        source_addr_npi: u8,
+        source_addr: String,
+        dest_addr_ton: u8,
+        dest_addr_npi: u8,
+        destination_addr: String,
+        esm_class: u8,
+        registered_delivery: u8,
+        data_coding: u8,
+    ) -> Result<data_sm_resp, SmppError> {
         if self.can_send {
             let sequence_number = self.next_sequence_number();
-            let data_sm = data_sm::new(sequence_number.clone(), service_type, source_addr_ton, source_addr_npi, source_addr, dest_addr_ton, dest_addr_npi, destination_addr, esm_class, registered_delivery, data_coding);
-            info!("[{} on server {}] sending data_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
+            let data_sm = data_sm::new(
+                sequence_number,
+                service_type,
+                source_addr_ton,
+                source_addr_npi,
+                source_addr,
+                dest_addr_ton,
+                dest_addr_npi,
+                destination_addr,
+                esm_class,
+                registered_delivery,
+                data_coding,
+            );
+            info!(
+                "[{} on server {}] sending data_sm with sequence_number {}",
+                self.client_address, self.server_address, sequence_number
+            );
 
             let (tx, rx) = oneshot::channel();
 
-            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: data_sm.encode(), oneshot: Some(tx) }).await {
-                Ok(_) => {},
+            match self
+                .tx_channel
+                .send(WriteFrame {
+                    our_sequence_number: Some(sequence_number),
+                    pdu: data_sm.encode(),
+                    oneshot: Some(tx),
+                })
+                .await
+            {
+                Ok(_) => {}
                 Err(e) => {
                     error!("[{} on server {}] unable to send data_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
                     return Err(SmppError::ESME_RSYSERR);
@@ -173,22 +310,33 @@ impl SMSC {
                 Ok(Ok(response)) => {
                     // response can be either data_sm_resp or generic_nack
                     if let Some(data_sm_resp) = response.as_any().downcast_ref::<data_sm_resp>() {
-                        info!("[{} on server {}] received data_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                        info!(
+                            "[{} on server {}] received data_sm_resp with sequence_number {}",
+                            self.client_address, self.server_address, sequence_number
+                        );
                         Ok(data_sm_resp.clone())
-                    } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                    } else if let Some(generic_nack) =
+                        response.as_any().downcast_ref::<generic_nack>()
+                    {
                         error!("[{} on server {}] received generic_nack in response to data_sm with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack);
                         Err(generic_nack.get_error())
                     } else {
                         error!("[{} on server {}] received unknown response to data_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
                         Err(SmppError::ESME_RSYSERR)
                     }
-                },
+                }
                 Ok(Err(e)) => {
-                    error!("[{} on server {}] unable to receive data_sm_resp: {}", self.client_address, self.server_address, e);
+                    error!(
+                        "[{} on server {}] unable to receive data_sm_resp: {}",
+                        self.client_address, self.server_address, e
+                    );
                     Err(SmppError::ESME_RSYSERR)
-                },
+                }
                 Err(_) => {
-                    error!("[{} on server {}] data_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                    error!(
+                        "[{} on server {}] data_sm_resp with sequence_number {} timed out",
+                        self.client_address, self.server_address, sequence_number
+                    );
                     Err(SmppError::ESME_RSYSERR)
                 }
             }
@@ -197,16 +345,47 @@ impl SMSC {
         }
     }
 
-    pub async fn send_cancel_sm(&self, _service_type: String, _message_id: String, _source_addr_ton: u8, _source_addr_npi: u8, _source_addr: String, _dest_addr_ton: u8, _dest_addr_npi: u8, _destination_addr: String) -> Result<cancel_sm_resp, SmppError> {
+    pub async fn send_cancel_sm(
+        &self,
+        _service_type: String,
+        _message_id: String,
+        _source_addr_ton: u8,
+        _source_addr_npi: u8,
+        _source_addr: String,
+        _dest_addr_ton: u8,
+        _dest_addr_npi: u8,
+        _destination_addr: String,
+    ) -> Result<cancel_sm_resp, SmppError> {
         if self.can_send {
             let sequence_number = self.next_sequence_number();
-            let cancel_sm = cancel_sm::new(sequence_number.clone(), _service_type, _message_id, _source_addr_ton, _source_addr_npi, _source_addr, _dest_addr_ton, _dest_addr_npi, _destination_addr);
-            info!("[{} on server {}] sending cancel_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
+            let cancel_sm = cancel_sm::new(
+                sequence_number,
+                _service_type,
+                _message_id,
+                _source_addr_ton,
+                _source_addr_npi,
+                _source_addr,
+                _dest_addr_ton,
+                _dest_addr_npi,
+                _destination_addr,
+            );
+            info!(
+                "[{} on server {}] sending cancel_sm with sequence_number {}",
+                self.client_address, self.server_address, sequence_number
+            );
 
             let (tx, rx) = oneshot::channel();
 
-            match self.tx_channel.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: cancel_sm.encode(), oneshot: Some(tx) }).await {
-                Ok(_) => {},
+            match self
+                .tx_channel
+                .send(WriteFrame {
+                    our_sequence_number: Some(sequence_number),
+                    pdu: cancel_sm.encode(),
+                    oneshot: Some(tx),
+                })
+                .await
+            {
+                Ok(_) => {}
                 Err(e) => {
                     error!("[{} on server {}] unable to send cancel_sm with sequence_number {} to writer thread: {}", self.client_address, self.server_address, sequence_number, e);
                     return Err(SmppError::ESME_RSYSERR);
@@ -218,45 +397,75 @@ impl SMSC {
             match response {
                 Ok(Ok(response)) => {
                     // response can be either cancel_sm_resp or generic_nack
-                    if let Some(cancel_sm_resp) = response.as_any().downcast_ref::<cancel_sm_resp>() {
-                        info!("[{} on server {}] received cancel_sm_resp with sequence_number {}", self.client_address, self.server_address, sequence_number);
+                    if let Some(cancel_sm_resp) = response.as_any().downcast_ref::<cancel_sm_resp>()
+                    {
+                        info!(
+                            "[{} on server {}] received cancel_sm_resp with sequence_number {}",
+                            self.client_address, self.server_address, sequence_number
+                        );
                         Ok(cancel_sm_resp.clone())
-                    } else if let Some(generic_nack) = response.as_any().downcast_ref::<generic_nack>() {
+                    } else if let Some(generic_nack) =
+                        response.as_any().downcast_ref::<generic_nack>()
+                    {
                         error!("[{} on server {}] received generic_nack in response to cancel_sm with sequence_number {}: {:?}", self.client_address, self.server_address, sequence_number, generic_nack);
                         Err(generic_nack.get_error())
                     } else {
                         error!("[{} on server {}] received unknown response to cancel_sm with sequence_number {}", self.client_address, self.server_address, sequence_number);
                         Err(SmppError::ESME_RSYSERR)
                     }
-                },
+                }
                 Ok(Err(e)) => {
-                    error!("[{} on server {}] unable to receive cancel_sm_resp: {}", self.client_address, self.server_address, e);
+                    error!(
+                        "[{} on server {}] unable to receive cancel_sm_resp: {}",
+                        self.client_address, self.server_address, e
+                    );
                     Err(SmppError::ESME_RSYSERR)
-                },
+                }
                 Err(_) => {
-                    error!("[{} on server {}] cancel_sm_resp with sequence_number {} timed out", self.client_address, self.server_address, sequence_number);
+                    error!(
+                        "[{} on server {}] cancel_sm_resp with sequence_number {} timed out",
+                        self.client_address, self.server_address, sequence_number
+                    );
                     Err(SmppError::ESME_RSYSERR)
                 }
             }
         } else {
             panic!("Can not send cancel_sm on non TX/TRX bind");
         }
-    }   
-    
+    }
 }
 
 #[async_trait]
 pub trait SmppClientListener {
-
-    async fn on_unbind(&self, unbind: unbind, connection_information: &SmppConnectionInformation, session_id: &String) -> unbind_resp;
-    async fn on_deliver_sm(&self, deliver_sm: deliver_sm, connection_information: &SmppConnectionInformation, session_id: &String) -> deliver_sm_resp;
-    async fn on_data_sm(&self, data_sm: data_sm, connection_information: &SmppConnectionInformation, session_id: &String) -> data_sm_resp;
-    async fn on_alert_notification(&self, alert_notification: alert_notification, connection_information: &SmppConnectionInformation, session_id: &String);
+    async fn on_unbind(
+        &self,
+        unbind: unbind,
+        connection_information: &SmppConnectionInformation,
+        session_id: &String,
+    ) -> unbind_resp;
+    async fn on_deliver_sm(
+        &self,
+        deliver_sm: deliver_sm,
+        connection_information: &SmppConnectionInformation,
+        session_id: &String,
+    ) -> deliver_sm_resp;
+    async fn on_data_sm(
+        &self,
+        data_sm: data_sm,
+        connection_information: &SmppConnectionInformation,
+        session_id: &String,
+    ) -> data_sm_resp;
+    async fn on_alert_notification(
+        &self,
+        alert_notification: alert_notification,
+        connection_information: &SmppConnectionInformation,
+        session_id: &String,
+    );
 
     /// Notification sent when an SMPP command timed-out (respone_timer triggered)
     async fn on_timeout(&self, sequence_number: u32, session_id: &String);
-    
-    /// Notification sent when an SMSC is in bound state and is ready for receiving commands. 
+
+    /// Notification sent when an SMSC is in bound state and is ready for receiving commands.
     /// The SMSC wraps the MPSC channel towards the writer thread of the bind
     async fn on_smsc_bound(&self, smsc: SMSC, session_id: &String);
 
@@ -274,8 +483,8 @@ struct StreamWrapper {
 
 impl StreamWrapper {
     pub fn new_tcp(stream: TcpStream) -> io::Result<Self> {
-        let server_address = stream.peer_addr().unwrap().clone();
-        let client_address = stream.local_addr().unwrap().clone();
+        let server_address = stream.peer_addr().unwrap();
+        let client_address = stream.local_addr().unwrap();
 
         let (read_half, write_half) = split(stream);
         Ok(StreamWrapper {
@@ -287,8 +496,8 @@ impl StreamWrapper {
     }
 
     pub fn new_tls(stream: TlsStream<TcpStream>) -> io::Result<Self> {
-        let server_address = stream.get_ref().get_ref().get_ref().peer_addr().unwrap().clone();
-        let client_address = stream.get_ref().get_ref().get_ref().local_addr().unwrap().clone();
+        let server_address = stream.get_ref().get_ref().get_ref().peer_addr().unwrap();
+        let client_address = stream.get_ref().get_ref().get_ref().local_addr().unwrap();
 
         let (read_half, write_half) = split(stream);
         Ok(StreamWrapper {
@@ -307,46 +516,120 @@ impl StreamWrapper {
         self.write_half.write(buf).await
     }
 
-    pub async fn split(self) -> (Box<dyn AsyncRead + Unpin + Send>, Box<dyn AsyncWrite + Unpin + Send>) {
+    pub async fn split(
+        self,
+    ) -> (
+        Box<dyn AsyncRead + Unpin + Send>,
+        Box<dyn AsyncWrite + Unpin + Send>,
+    ) {
         let read_half = self.read_half;
         let write_half = self.write_half;
         (read_half, write_half)
     }
-    
+
     fn local_addr(&self) -> SocketAddr {
         self.client_address
     }
-    
+
     fn peer_addr(&self) -> SocketAddr {
         self.server_address
     }
 }
 
-
 impl SmppClient {
+    pub fn new(
+        server_address: String,
+        server_port: u16,
+        tls: bool,
+        bind_type: BIND_TYPE,
+        system_id: String,
+        password: String,
+        system_type: String,
+        addr_ton: u8,
+        addr_npi: u8,
+        address_range: String,
+        handler: Arc<dyn SmppClientListener + Send + Sync + 'static>,
+        window_size: usize,
+    ) -> SmppClient {
+        SmppClient::new_with_default_timers(
+            server_address,
+            server_port,
+            tls,
+            bind_type,
+            system_id,
+            password,
+            system_type,
+            addr_ton,
+            addr_npi,
+            address_range,
+            handler,
+            5000,
+            30000,
+            300000,
+            30000,
+            1500,
+            window_size,
+        )
+    }
 
-    pub fn new(server_address: String, server_port: u16, tls: bool, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<dyn SmppClientListener + Send + Sync + 'static>, window_size: usize) -> SmppClient {
-        SmppClient::new_with_default_timers(server_address, server_port, tls, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handler, 5000, 30000, 300000, 30000, 1500, window_size)
-    } 
-
-    pub fn new_with_default_timers(server_address: String, server_port: u16, tls: bool, bind_type: BIND_TYPE, system_id: String, password: String, system_type: String, addr_ton: u8, addr_npi: u8, address_range: String, handler: Arc<dyn SmppClientListener + Send + Sync + 'static>, session_init_timer: u64, enquire_link_timer: u64, inactivity_timer: u64, response_timer: u64, buffer_size: usize, window_size: usize) -> SmppClient {
-        SmppClient { server_address, server_port, tls, bind_type, system_id, password, system_type, addr_ton, addr_npi, address_range, handle: None, alive: Arc::new(AtomicBool::new(false)), handler, session_init_timer, enquire_link_timer, inactivity_timer, response_timer, buffer_size, window_size }
+    pub fn new_with_default_timers(
+        server_address: String,
+        server_port: u16,
+        tls: bool,
+        bind_type: BIND_TYPE,
+        system_id: String,
+        password: String,
+        system_type: String,
+        addr_ton: u8,
+        addr_npi: u8,
+        address_range: String,
+        handler: Arc<dyn SmppClientListener + Send + Sync + 'static>,
+        session_init_timer: u64,
+        enquire_link_timer: u64,
+        inactivity_timer: u64,
+        response_timer: u64,
+        buffer_size: usize,
+        window_size: usize,
+    ) -> SmppClient {
+        SmppClient {
+            server_address,
+            server_port,
+            tls,
+            bind_type,
+            system_id,
+            password,
+            system_type,
+            addr_ton,
+            addr_npi,
+            address_range,
+            handle: None,
+            alive: Arc::new(AtomicBool::new(false)),
+            handler,
+            session_init_timer,
+            enquire_link_timer,
+            inactivity_timer,
+            response_timer,
+            buffer_size,
+            window_size,
+        }
     }
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
-    } 
+    }
 
     pub async fn start(&mut self) {
-
         if self.alive.load(Ordering::SeqCst) {
             panic!("Can not start client twice")
         }
 
-        info!("Starting smpp client for server {} with window size: {}", self.server_address, self.window_size);
+        info!(
+            "Starting smpp client for server {} with window size: {}",
+            self.server_address, self.window_size
+        );
 
         let server_socket_address = self.server_address.clone();
-        let server_socker_port = self.server_port.clone();
+        let server_socker_port = self.server_port;
         let alive = self.alive.clone();
         let listener = self.handler.clone();
         let session_init_timer = self.session_init_timer;
@@ -358,19 +641,19 @@ impl SmppClient {
         let system_id = self.system_id.clone();
         let password = self.password.clone();
         let system_type = self.system_type.clone();
-        let addr_ton = self.addr_ton.clone();
-        let addr_npi = self.addr_npi.clone();
+        let addr_ton = self.addr_ton;
+        let addr_npi = self.addr_npi;
         let address_range = self.address_range.clone();
-        let tls = self.tls.clone();
-
+        let tls = self.tls;
 
         self.handle = Some(tokio::spawn(async move {
-
             let mut stream = if tls {
-                let connector = TlsConnector::from(native_tls::TlsConnector::builder()
-                .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-                .build()
-                .unwrap());
+                let connector = TlsConnector::from(
+                    native_tls::TlsConnector::builder()
+                        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+                        .build()
+                        .unwrap(),
+                );
 
                 let domain = server_socket_address.clone();
                 let address = format!("{}:{}", &domain, &server_socker_port);
@@ -384,34 +667,60 @@ impl SmppClient {
 
                 StreamWrapper::new_tcp(stream).unwrap()
             };
-            
 
             // TODO set connection timeout!
-            info!("smpp client connected to server {}, sending bind PDU", server_socket_address);
+            info!(
+                "smpp client connected to server {}, sending bind PDU",
+                server_socket_address
+            );
 
-            let connection_information  = SmppConnectionInformation {
+            let connection_information = SmppConnectionInformation {
                 server_address: stream.peer_addr(),
                 client_address: stream.local_addr(),
             };
 
             let bind_pdu: Vec<u8> = match bind_type {
-                BIND_TYPE::RX => {
-                    bind_receiver::new(1, system_id.clone(), password, system_type, addr_ton, addr_npi, address_range).encode()
-                },
-                BIND_TYPE::TX => {
-                    bind_transmitter::new(1, system_id.clone(), password, system_type, addr_ton, addr_npi, address_range).encode()
-                },
-                BIND_TYPE::TRX => {
-                    bind_transceiver::new(1, system_id.clone(), password, system_type, addr_ton, addr_npi, address_range).encode()
-                },
+                BIND_TYPE::RX => bind_receiver::new(
+                    1,
+                    system_id.clone(),
+                    password,
+                    system_type,
+                    addr_ton,
+                    addr_npi,
+                    address_range,
+                )
+                .encode(),
+                BIND_TYPE::TX => bind_transmitter::new(
+                    1,
+                    system_id.clone(),
+                    password,
+                    system_type,
+                    addr_ton,
+                    addr_npi,
+                    address_range,
+                )
+                .encode(),
+                BIND_TYPE::TRX => bind_transceiver::new(
+                    1,
+                    system_id.clone(),
+                    password,
+                    system_type,
+                    addr_ton,
+                    addr_npi,
+                    address_range,
+                )
+                .encode(),
             };
 
             // Send bind request
-            stream.write(&bind_pdu).await.expect("Unable to write to TCP stream");
-
+            stream
+                .write(&bind_pdu)
+                .await
+                .expect("Unable to write to TCP stream");
 
             info!("Bind PDU sent, waiting for response");
-            let session_init_timer_duration = tokio::time::Duration::from_millis(session_init_timer);
+            let session_init_timer_duration =
+                tokio::time::Duration::from_millis(session_init_timer);
             let mut buffer = [0; 1024]; // Not using BytesMut here as we always first get a bind before expecting big traffic so chose a low buffer size
             let first_read = timeout(session_init_timer_duration, stream.read(&mut buffer)).await;
 
@@ -422,16 +731,30 @@ impl SmppClient {
 
                     // Try read sequence_number in case we need a generic_nack.
                     // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
-                    let potential_seq_no = if pdu_length >= 16 { u32::from_be_bytes(pdu[12..16].try_into().expect("Can not read sequence_number")) } else { 0 };
+                    let potential_seq_no = if pdu_length >= 16 {
+                        u32::from_be_bytes(
+                            pdu[12..16]
+                                .try_into()
+                                .expect("Can not read sequence_number"),
+                        )
+                    } else {
+                        0
+                    };
                     let command_header = CommandHeader::decode(&pdu);
 
                     match command_header {
                         Ok(header) => {
-                            if potential_seq_no == 1 && header.command_status == SmppError::ESME_ROK as u32
-                                && ((bind_type == BIND_TYPE::RX && header.command_id == CommandId::bind_receiver_resp as u32) 
-                                || (bind_type == BIND_TYPE::TX && header.command_id == CommandId::bind_transmitter_resp as u32) 
-                                || (bind_type == BIND_TYPE::TRX && header.command_id ==CommandId::bind_transceiver_resp as u32) 
-                            ) {
+                            if potential_seq_no == 1
+                                && header.command_status == SmppError::ESME_ROK as u32
+                                && ((bind_type == BIND_TYPE::RX
+                                    && header.command_id == CommandId::bind_receiver_resp as u32)
+                                    || (bind_type == BIND_TYPE::TX
+                                        && header.command_id
+                                            == CommandId::bind_transmitter_resp as u32)
+                                    || (bind_type == BIND_TYPE::TRX
+                                        && header.command_id
+                                            == CommandId::bind_transceiver_resp as u32))
+                            {
                                 let session_id = Uuid::new_v4().to_string();
                                 info!("Successfuly bound in {} mode", bind_type);
 
@@ -440,34 +763,62 @@ impl SmppClient {
                                 let (mut reader, mut writer) = stream.split().await;
 
                                 let (tx, mut rx) = channel::<WriteFrame>(100);
-                                let pending_requests: Arc<Mutex<HashMap<u32, (SystemTime, Option<tokio::sync::oneshot::Sender<Box<dyn SmppReply + Send + Sync + 'static>>>)>>> = Arc::new(Mutex::new(HashMap::new()));
+                                let pending_requests: Arc<
+                                    Mutex<
+                                        HashMap<
+                                            u32,
+                                            (
+                                                SystemTime,
+                                                Option<
+                                                    tokio::sync::oneshot::Sender<
+                                                        Box<dyn SmppReply + Send + Sync + 'static>,
+                                                    >,
+                                                >,
+                                            ),
+                                        >,
+                                    >,
+                                > = Arc::new(Mutex::new(HashMap::new()));
 
                                 let read_timeout = tokio::time::Duration::from_millis(500); // Set a little time-out so we are able to detect if inactivity_timer or enquire_link timers expired
                                 let mut buffer = BytesMut::with_capacity(buffer_size);
-                                let mut last_read = Instant::now(); 
+                                let mut last_read = Instant::now();
                                 let sequence_number = Arc::new(AtomicU32::new(2));
 
                                 let writer_alive = alive.clone();
                                 let writer_pending_requests = pending_requests.clone();
                                 let writer_thread = tokio::task::spawn(async move {
-                                    info!("[{} on server {}] writer thread started", connection_information.client_address, connection_information.server_address);
+                                    info!(
+                                        "[{} on server {}] writer thread started",
+                                        connection_information.client_address,
+                                        connection_information.server_address
+                                    );
                                     while writer_alive.load(Ordering::SeqCst) {
-                                       if let Some(frame) = rx.recv().await {
+                                        if let Some(frame) = rx.recv().await {
                                             match writer.write(&frame.pdu).await {
-                                                Ok(_) => { 
+                                                Ok(_) => {
                                                     if frame.our_sequence_number.is_some() {
-                                                        let mut guard = writer_pending_requests.lock().await;
-                                                        guard.insert(frame.our_sequence_number.unwrap(), (SystemTime::now(), frame.oneshot)); 
+                                                        let mut guard =
+                                                            writer_pending_requests.lock().await;
+                                                        guard.insert(
+                                                            frame.our_sequence_number.unwrap(),
+                                                            (SystemTime::now(), frame.oneshot),
+                                                        );
                                                     }
-                                                },
-                                                Err(e) => { error!("Unable to write to TCP stream {}", e) },
+                                                }
+                                                Err(e) => {
+                                                    error!("Unable to write to TCP stream {}", e)
+                                                }
                                             }
-                                       } else {
+                                        } else {
                                             error!("[{} on server {}] writer thread unable to receive frame", connection_information.client_address, connection_information.server_address);
                                             break;
-                                       }
+                                        }
                                     }
-                                    info!("[{} on server {}] writer thread stopped", connection_information.client_address, connection_information.server_address);
+                                    info!(
+                                        "[{} on server {}] writer thread stopped",
+                                        connection_information.client_address,
+                                        connection_information.server_address
+                                    );
                                 });
 
                                 let send_enquire_link = alive.clone();
@@ -476,94 +827,149 @@ impl SmppClient {
                                 let (enquire_link_tx, mut enquire_link_rx) = channel::<u32>(100);
                                 let enquire_link_ticker = tokio::task::spawn(async move {
                                     info!("[{} on server {}] enquire_link timer started, sending every {}ms", connection_information.client_address, connection_information.server_address, enquire_link_timer);
-                                    let mut enquire_link_timer = interval(Duration::from_millis(enquire_link_timer));
+                                    let mut enquire_link_timer =
+                                        interval(Duration::from_millis(enquire_link_timer));
                                     let response_timer = Duration::from_millis(response_timer);
                                     enquire_link_timer.tick().await; // tick for the first time to warm the timer
                                     enquire_link_timer.tick().await; // tick for the second time to start sending enquire_links only on next interval (as we just opened the connection it makes no sense to tick immediately)
 
                                     while send_enquire_link.load(Ordering::SeqCst) {
-                                        let sequence_number = enquire_link_sequence_number.fetch_add(1, Ordering::SeqCst);
+                                        let sequence_number = enquire_link_sequence_number
+                                            .fetch_add(1, Ordering::SeqCst);
                                         info!("[{} on server {}] sending enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, sequence_number);
 
-                                        if let Err(e) = enquire_link_writer_tx.send(WriteFrame { our_sequence_number: Some(sequence_number), pdu: enquire_link::new(sequence_number).encode(), oneshot: None }).await {
+                                        if let Err(e) = enquire_link_writer_tx
+                                            .send(WriteFrame {
+                                                our_sequence_number: Some(sequence_number),
+                                                pdu: enquire_link::new(sequence_number).encode(),
+                                                oneshot: None,
+                                            })
+                                            .await
+                                        {
                                             error!("[{} on server {}] unable to send enquire_link, writer closed: {}", connection_information.client_address, connection_information.server_address, e);
                                             break;
                                         }
 
-                                        let response = timeout(response_timer, enquire_link_rx.recv()).await;
+                                        let response =
+                                            timeout(response_timer, enquire_link_rx.recv()).await;
 
                                         match response {
                                             Ok(Some(sequence)) => {
                                                 // We want the sequence number to match, otherwise we must kill this bind
-                                                if sequence != sequence_number { 
+                                                if sequence != sequence_number {
                                                     error!("[{} on server {}] enquire_link_resp with sequence_number {} did not match sequence_number {}", connection_information.client_address, connection_information.server_address, sequence, sequence_number);
                                                     break;
-                                                } 
-                                            },
+                                                }
+                                            }
                                             Ok(None) => {
                                                 error!("[{} on server {}] enquire_link with sequence_number {} channel closed", connection_information.client_address, connection_information.server_address, sequence_number);
                                                 break;
-                                            },
+                                            }
                                             Err(_) => {
                                                 error!("[{} on server {}] enquire_link with sequence_number {} no response within {}ms", connection_information.client_address, connection_information.server_address, sequence_number, response_timer.as_millis());
                                                 break;
                                             }
                                         }
-                                
+
                                         // Wait for next interval to send timer again
                                         enquire_link_timer.tick().await;
                                     }
-                                    info!("[{} on server {}] enquire_link timer stopped", connection_information.client_address, connection_information.server_address);
+                                    info!(
+                                        "[{} on server {}] enquire_link timer stopped",
+                                        connection_information.client_address,
+                                        connection_information.server_address
+                                    );
                                 });
 
-                                listener.on_smsc_bound(SMSC {
-                                    can_send: bind_type == BIND_TYPE::TX || bind_type == BIND_TYPE::TRX, 
-                                    tx_channel: tx.clone(), 
-                                    sequence_number,
-                                    server_address: connection_information.server_address.clone(),
-                                    client_address: connection_information.client_address.clone(),
-                                    session_id: session_id.clone(),
-                                    system_id: system_id.clone(),
-                                    response_timer: response_timer.clone() }, &session_id
-                                ).await;
+                                listener
+                                    .on_smsc_bound(
+                                        SMSC {
+                                            can_send: bind_type == BIND_TYPE::TX
+                                                || bind_type == BIND_TYPE::TRX,
+                                            tx_channel: tx.clone(),
+                                            sequence_number,
+                                            server_address: connection_information.server_address,
+                                            client_address: connection_information.client_address,
+                                            session_id: session_id.clone(),
+                                            system_id: system_id.clone(),
+                                            response_timer,
+                                        },
+                                        &session_id,
+                                    )
+                                    .await;
 
                                 // Main read loop
                                 while alive.load(Ordering::SeqCst) {
-                                    let result = timeout(read_timeout, reader.read_buf(&mut buffer)).await;
+                                    let result =
+                                        timeout(read_timeout, reader.read_buf(&mut buffer)).await;
                                     match result {
                                         Ok(Ok(frame_length)) => {
                                             let frame = buffer[0..frame_length].to_vec();
-                                            if frame_length >= 16 { // anything else we don't want
+                                            if frame_length >= 16 {
+                                                // anything else we don't want
                                                 let mut cursor = 0;
                                                 let mut last_pdu_was_unbind = false;
                                                 let mut writer_dead = false;
-                                                while cursor < frame_length && frame_length - cursor >= 16 { // Only read when we have bytes left in the frame AND at least 16 bytes left in the buffer (we choose to ignore and not decode)
-                                                    let pdu_length: u32 = u32::from_be_bytes(frame[cursor..cursor + 4].try_into().expect("Can not read PDU length"));
-                                                    let pdu = buffer[cursor as usize..cursor + pdu_length as usize].to_vec();
+                                                while cursor < frame_length
+                                                    && frame_length - cursor >= 16
+                                                {
+                                                    // Only read when we have bytes left in the frame AND at least 16 bytes left in the buffer (we choose to ignore and not decode)
+                                                    let pdu_length: u32 = u32::from_be_bytes(
+                                                        frame[cursor..cursor + 4]
+                                                            .try_into()
+                                                            .expect("Can not read PDU length"),
+                                                    );
+                                                    let pdu = buffer
+                                                        [cursor..cursor + pdu_length as usize]
+                                                        .to_vec();
 
                                                     // Try read sequence_number in case we need a generic_nack.
                                                     // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
-                                                    let potential_seq_no = if pdu_length >= 16 { u32::from_be_bytes(pdu[12..16].try_into().expect("Can not read sequence_number")) } else { 0 };
-                                                    let command_header = CommandHeader::decode(&pdu);
+                                                    let potential_seq_no = if pdu_length >= 16 {
+                                                        u32::from_be_bytes(
+                                                            pdu[12..16].try_into().expect(
+                                                                "Can not read sequence_number",
+                                                            ),
+                                                        )
+                                                    } else {
+                                                        0
+                                                    };
+                                                    let command_header =
+                                                        CommandHeader::decode(&pdu);
                                                     let tx = tx.clone();
 
                                                     match command_header {
                                                         Ok(header) => {
-                                                            if header.command_id == CommandId::deliver_sm as u32 && (bind_type == BIND_TYPE::RX || bind_type == BIND_TYPE::TRX)  {
-                                                                match deliver_sm::decode(header, &pdu) {
+                                                            if header.command_id
+                                                                == CommandId::deliver_sm as u32
+                                                                && (bind_type == BIND_TYPE::RX
+                                                                    || bind_type == BIND_TYPE::TRX)
+                                                            {
+                                                                match deliver_sm::decode(
+                                                                    header, &pdu,
+                                                                ) {
                                                                     Ok(deliver_sm) => {
                                                                         info!("[{} on server {}] received deliver_sm with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                                                        let handler = listener.clone();
-                                                                        let conn = connection_information.clone();
-                                                                        let sid = session_id.clone();
+                                                                        let handler =
+                                                                            listener.clone();
+                                                                        let conn =
+                                                                            connection_information
+                                                                                .clone();
+                                                                        let sid =
+                                                                            session_id.clone();
                                                                         let tx = tx.clone();
                                                                         tokio::spawn(async move {
-                                                                            let resp = handler.on_deliver_sm(deliver_sm, &conn, &sid).await;
+                                                                            let resp = handler
+                                                                                .on_deliver_sm(
+                                                                                    deliver_sm,
+                                                                                    &conn, &sid,
+                                                                                )
+                                                                                .await;
                                                                             if let Err(e) = tx.send(WriteFrame { our_sequence_number: None, pdu: resp.encode(), oneshot: None }).await {
                                                                                 error!("[{} on server {}] unable to send deliver_sm_resp, writer closed: {}", conn.client_address, conn.server_address, e);
                                                                             }
                                                                         });
-                                                                    },
+                                                                    }
                                                                     Err(error) => {
                                                                         error!("[{} on server {}] unable to decode submit_sm: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                         let error = submit_sm::generic_reject(potential_seq_no, error).encode();
@@ -574,21 +980,33 @@ impl SmppClient {
                                                                         }
                                                                     }
                                                                 }
-                                                            } else if header.command_id == CommandId::data_sm as u32 {
-                                                                match data_sm::decode(header, &pdu) {
+                                                            } else if header.command_id
+                                                                == CommandId::data_sm as u32
+                                                            {
+                                                                match data_sm::decode(header, &pdu)
+                                                                {
                                                                     Ok(data_sm) => {
                                                                         info!("[{} on server {}] received data_sm with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                                                        let handler = listener.clone();
-                                                                        let conn = connection_information.clone();
-                                                                        let sid = session_id.clone();
+                                                                        let handler =
+                                                                            listener.clone();
+                                                                        let conn =
+                                                                            connection_information
+                                                                                .clone();
+                                                                        let sid =
+                                                                            session_id.clone();
                                                                         let tx = tx.clone();
                                                                         tokio::spawn(async move {
-                                                                            let resp = handler.on_data_sm(data_sm, &conn, &sid).await;
+                                                                            let resp = handler
+                                                                                .on_data_sm(
+                                                                                    data_sm, &conn,
+                                                                                    &sid,
+                                                                                )
+                                                                                .await;
                                                                             if let Err(e) = tx.send(WriteFrame { our_sequence_number: None, pdu: resp.encode(), oneshot: None }).await {
                                                                                 error!("[{} on server {}] unable to send data_sm_resp, writer closed: {}", conn.client_address, conn.server_address, e);
                                                                             }
                                                                         });
-                                                                    },
+                                                                    }
                                                                     Err(error) => {
                                                                         error!("[{} on server {}] unable to decode data_sm: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                         let error = data_sm::generic_reject(potential_seq_no, error).encode();
@@ -599,25 +1017,41 @@ impl SmppClient {
                                                                         }
                                                                     }
                                                                 }
-                                                            } else if header.command_id == CommandId::submit_sm_resp as u32 && (bind_type == BIND_TYPE::TX || bind_type == BIND_TYPE::TRX) {
-                                                                let mut guard = pending_requests.lock().await;
-                                                                if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
+                                                            } else if header.command_id
+                                                                == CommandId::submit_sm_resp as u32
+                                                                && (bind_type == BIND_TYPE::TX
+                                                                    || bind_type == BIND_TYPE::TRX)
+                                                            {
+                                                                let mut guard =
+                                                                    pending_requests.lock().await;
+                                                                if let Some((time, oneshot)) = guard
+                                                                    .remove(&header.sequence_number)
+                                                                {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
-                                                                    if  lapsed > response_timer.into() {
-
+                                                                    let lapsed = time
+                                                                        .elapsed()
+                                                                        .expect("Unable to elapse")
+                                                                        .as_millis();
+                                                                    if lapsed
+                                                                        > response_timer.into()
+                                                                    {
                                                                         error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                                                         listener.on_timeout(header.sequence_number, &session_id).await;
                                                                     } else {
-                                                                        match submit_sm_resp::decode(header, &pdu) {
+                                                                        match submit_sm_resp::decode(
+                                                                            header, &pdu,
+                                                                        ) {
                                                                             Ok(submit_sm_resp) => {
                                                                                 info!("[{} on server {}] received submit_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                                                                 let connection_information = connection_information.clone();
-        
+
                                                                                 // Send the response to the original sender
-                                                                                if let Some(oneshot) = oneshot {
+                                                                                if let Some(
+                                                                                    oneshot,
+                                                                                ) = oneshot
+                                                                                {
                                                                                     match oneshot.send(Box::new(submit_sm_resp.clone())) {
                                                                                         Ok(_) => {
                                                                                             info!("[{} on server {}] submit_sm_resp sent to original sender", connection_information.client_address, connection_information.server_address);
@@ -629,7 +1063,7 @@ impl SmppClient {
                                                                                 } else {
                                                                                     error!("[{} on server {}] No oneshot channel registered for submit_sm", connection_information.client_address, connection_information.server_address);
                                                                                 }
-                                                                            },
+                                                                            }
                                                                             Err(error) => {
                                                                                 error!("[{} on server {}] unable to decode submit_sm_resp: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                                 let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
@@ -644,24 +1078,41 @@ impl SmppClient {
                                                                 } else {
                                                                     error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                                                 }
-                                                            } else if header.command_id == CommandId::data_sm_resp as u32 && (bind_type == BIND_TYPE::TX || bind_type == BIND_TYPE::TRX) {
-                                                                let mut guard = pending_requests.lock().await;
-                                                                if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
+                                                            } else if header.command_id
+                                                                == CommandId::data_sm_resp as u32
+                                                                && (bind_type == BIND_TYPE::TX
+                                                                    || bind_type == BIND_TYPE::TRX)
+                                                            {
+                                                                let mut guard =
+                                                                    pending_requests.lock().await;
+                                                                if let Some((time, oneshot)) = guard
+                                                                    .remove(&header.sequence_number)
+                                                                {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
-                                                                    if  lapsed > response_timer.into() {
+                                                                    let lapsed = time
+                                                                        .elapsed()
+                                                                        .expect("Unable to elapse")
+                                                                        .as_millis();
+                                                                    if lapsed
+                                                                        > response_timer.into()
+                                                                    {
                                                                         error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                                                         listener.on_timeout(header.sequence_number, &session_id).await;
                                                                     } else {
-                                                                        match data_sm_resp::decode(header, &pdu) {
+                                                                        match data_sm_resp::decode(
+                                                                            header, &pdu,
+                                                                        ) {
                                                                             Ok(data_sm_resp) => {
                                                                                 info!("[{} on server {}] received data_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                                                                 let connection_information = connection_information.clone();
 
                                                                                 // Send the response to the original sender
-                                                                                if let Some(oneshot) = oneshot {
+                                                                                if let Some(
+                                                                                    oneshot,
+                                                                                ) = oneshot
+                                                                                {
                                                                                     match oneshot.send(Box::new(data_sm_resp)) {
                                                                                         Ok(_) => {
                                                                                             info!("[{} on server {}] data_sm_resp sent to original sender", connection_information.client_address, connection_information.server_address);
@@ -673,7 +1124,7 @@ impl SmppClient {
                                                                                 } else {
                                                                                     error!("[{} on server {}] No oneshot channel registered for data_sm", connection_information.client_address, connection_information.server_address);
                                                                                 }
-                                                                            },
+                                                                            }
                                                                             Err(error) => {
                                                                                 error!("[{} on server {}] unable to decode data_sm_resp: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                                 let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
@@ -688,24 +1139,39 @@ impl SmppClient {
                                                                 } else {
                                                                     error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                                                 }
-                                                            } else if header.command_id == CommandId::cancel_sm_resp as u32 {
-                                                                let mut guard = pending_requests.lock().await;
-                                                                if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
+                                                            } else if header.command_id
+                                                                == CommandId::cancel_sm_resp as u32
+                                                            {
+                                                                let mut guard =
+                                                                    pending_requests.lock().await;
+                                                                if let Some((time, oneshot)) = guard
+                                                                    .remove(&header.sequence_number)
+                                                                {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
-                                                                    if  lapsed > response_timer.into() {
+                                                                    let lapsed = time
+                                                                        .elapsed()
+                                                                        .expect("Unable to elapse")
+                                                                        .as_millis();
+                                                                    if lapsed
+                                                                        > response_timer.into()
+                                                                    {
                                                                         error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                                                         listener.on_timeout(header.sequence_number, &session_id).await;
                                                                     } else {
-                                                                        match cancel_sm_resp::decode(header, &pdu) {
+                                                                        match cancel_sm_resp::decode(
+                                                                            header, &pdu,
+                                                                        ) {
                                                                             Ok(cancel_sm_resp) => {
                                                                                 info!("[{} on server {}] received cancel_sm_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                                                                 let connection_information = connection_information.clone();
 
                                                                                 // Send the response to the original sender
-                                                                                if let Some(oneshot) = oneshot {
+                                                                                if let Some(
+                                                                                    oneshot,
+                                                                                ) = oneshot
+                                                                                {
                                                                                     match oneshot.send(Box::new(cancel_sm_resp)) {
                                                                                         Ok(_) => {
                                                                                             info!("[{} on server {}] cancel_sm_resp sent to original sender", connection_information.client_address, connection_information.server_address);
@@ -717,7 +1183,7 @@ impl SmppClient {
                                                                                 } else {
                                                                                     error!("[{} on server {}] No oneshot channel registered for cancel_sm", connection_information.client_address, connection_information.server_address);
                                                                                 }
-                                                                            },
+                                                                            }
                                                                             Err(error) => {
                                                                                 error!("[{} on server {}] unable to decode cancel_sm_resp: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                                 let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
@@ -732,16 +1198,25 @@ impl SmppClient {
                                                                 } else {
                                                                     error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                                                 }
-                                                            } else if header.command_id == CommandId::alert_notification as u32 {
-                                                                match alert_notification::decode(header, &pdu) {
+                                                            } else if header.command_id
+                                                                == CommandId::alert_notification
+                                                                    as u32
+                                                            {
+                                                                match alert_notification::decode(
+                                                                    header, &pdu,
+                                                                ) {
                                                                     Ok(alert_notification) => {
                                                                         info!("[{} on server {}] received alert_notification with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                                                        let handler = listener.clone();
-                                                                        let connection_information = connection_information.clone();
-                                                                        let submit_sm_session_id = session_id.clone();
+                                                                        let handler =
+                                                                            listener.clone();
+                                                                        let connection_information =
+                                                                            connection_information
+                                                                                .clone();
+                                                                        let submit_sm_session_id =
+                                                                            session_id.clone();
 
                                                                         handler.on_alert_notification(alert_notification.clone(), &connection_information, &submit_sm_session_id).await;
-                                                                    },
+                                                                    }
                                                                     Err(error) => {
                                                                         error!("[{} on server {}] unable to decode alert_notification: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                         let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
@@ -752,18 +1227,23 @@ impl SmppClient {
                                                                         }
                                                                     }
                                                                 }
-                                                            } else if header.command_id == CommandId::enquire_link as u32 {
-                                                                match enquire_link::decode(header, &pdu) {
+                                                            } else if header.command_id
+                                                                == CommandId::enquire_link as u32
+                                                            {
+                                                                match enquire_link::decode(
+                                                                    header, &pdu,
+                                                                ) {
                                                                     Ok(enquire_link) => {
                                                                         info!("[{} on server {}] received enquire_link with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
-                                                                        let enquire_link_resp = enquire_link.accept();
+                                                                        let enquire_link_resp =
+                                                                            enquire_link.accept();
                                                                         info!("[{} on server {}] sending enquire_link_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                                                         if tx.send(WriteFrame { our_sequence_number: None, pdu: enquire_link_resp.encode(), oneshot: None }).await.is_err() {
                                                                             error!("[{} on server {}] writer channel closed, stopping read loop", connection_information.client_address, connection_information.server_address);
                                                                             writer_dead = true;
                                                                             break;
                                                                         }
-                                                                    },
+                                                                    }
                                                                     Err(error) => {
                                                                         error!("[{} on server {}] unable to decode enquire_link: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                         let error = submit_sm::generic_reject(potential_seq_no, error).encode();
@@ -774,34 +1254,47 @@ impl SmppClient {
                                                                         }
                                                                     }
                                                                 }
-                                                            } else if header.command_id == CommandId::enquire_link_resp as u32 {
+                                                            } else if header.command_id
+                                                                == CommandId::enquire_link_resp
+                                                                    as u32
+                                                            {
                                                                 info!("[{} on server {}] received enquire_link_resp for sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
 
                                                                 // Forward to enquire_link timer task; if that task has already exited, the read loop will detect that via enquire_link_ticker.is_finished() below and break cleanly.
-                                                                if let Err(e) = enquire_link_tx.send(header.sequence_number).await {
+                                                                if let Err(e) = enquire_link_tx
+                                                                    .send(header.sequence_number)
+                                                                    .await
+                                                                {
                                                                     error!("[{} on server {}] enquire_link timer task gone, dropping enquire_link_resp seq {}: {}", connection_information.client_address, connection_information.server_address, header.sequence_number, e);
                                                                 }
 
                                                                 // Cleanup pending requests
-                                                                let mut guard = pending_requests.lock().await;
-                                                                if let Some((time, _)) = guard.remove(&header.sequence_number) {
+                                                                let mut guard =
+                                                                    pending_requests.lock().await;
+                                                                if let Some((time, _)) = guard
+                                                                    .remove(&header.sequence_number)
+                                                                {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
-                                                                    if  lapsed > response_timer.into() {
+                                                                    let lapsed = time
+                                                                        .elapsed()
+                                                                        .expect("Unable to elapse")
+                                                                        .as_millis();
+                                                                    if lapsed
+                                                                        > response_timer.into()
+                                                                    {
                                                                         error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                                                         listener.on_timeout(header.sequence_number, &session_id).await;
-                                                                    } 
-
+                                                                    }
                                                                 } else {
                                                                     error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                                                 }
-
-                                                            } else if header.command_id == CommandId::unbind as u32 {
-
+                                                            } else if header.command_id
+                                                                == CommandId::unbind as u32
+                                                            {
                                                                 // Whether or not the unbind fails, we don't care, if any ESMe sends us an unbind we stop the connection, so first we stop the enquire_link timer
-                                                                enquire_link_ticker.abort(); 
+                                                                enquire_link_ticker.abort();
 
                                                                 match unbind::decode(header, &pdu) {
                                                                     Ok(unbind) => {
@@ -809,10 +1302,15 @@ impl SmppClient {
                                                                         if let Err(e) = tx.send(WriteFrame { our_sequence_number: None, pdu: unbind_resp.encode(), oneshot: None }).await {
                                                                             error!("[{} on server {}] unable to send unbind_resp, writer closed: {}", connection_information.client_address, connection_information.server_address, e);
                                                                         }
-                                                                    },
+                                                                    }
                                                                     Err(error) => {
                                                                         error!("[{} on server {}] unable to decode unbind: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
-                                                                        let error = unbind::generic_reject(potential_seq_no, error).encode();
+                                                                        let error =
+                                                                            unbind::generic_reject(
+                                                                                potential_seq_no,
+                                                                                error,
+                                                                            )
+                                                                            .encode();
                                                                         if let Err(e) = tx.send(WriteFrame { our_sequence_number: None, pdu: error, oneshot: None }).await {
                                                                             error!("[{} on server {}] unable to send unbind generic_reject, writer closed: {}", connection_information.client_address, connection_information.server_address, e);
                                                                         }
@@ -821,25 +1319,40 @@ impl SmppClient {
 
                                                                 last_pdu_was_unbind = true;
 
-                                                                break; 
-                                                            } else if header.command_id == CommandId::unbind_resp as u32 {
-                                                                let mut guard = pending_requests.lock().await;
-                                                                if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
+                                                                break;
+                                                            } else if header.command_id
+                                                                == CommandId::unbind_resp as u32
+                                                            {
+                                                                let mut guard =
+                                                                    pending_requests.lock().await;
+                                                                if let Some((time, oneshot)) = guard
+                                                                    .remove(&header.sequence_number)
+                                                                {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
-                                                                    if  lapsed > response_timer.into() {
+                                                                    let lapsed = time
+                                                                        .elapsed()
+                                                                        .expect("Unable to elapse")
+                                                                        .as_millis();
+                                                                    if lapsed
+                                                                        > response_timer.into()
+                                                                    {
                                                                         error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                                                         listener.on_timeout(header.sequence_number, &session_id).await;
                                                                     } else {
-                                                                        match unbind_resp::decode(header, &pdu) {
+                                                                        match unbind_resp::decode(
+                                                                            header, &pdu,
+                                                                        ) {
                                                                             Ok(unbind_resp) => {
                                                                                 info!("[{} on server {}] received unbind_resp with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                                                                 let connection_information = connection_information.clone();
 
                                                                                 // Send the response to the original sender
-                                                                                if let Some(oneshot) = oneshot {
+                                                                                if let Some(
+                                                                                    oneshot,
+                                                                                ) = oneshot
+                                                                                {
                                                                                     match oneshot.send(Box::new(unbind_resp.clone())) {
                                                                                         Ok(_) => {
                                                                                             info!("[{} on server {}] unbind_resp sent to original sender", connection_information.client_address, connection_information.server_address);
@@ -852,10 +1365,9 @@ impl SmppClient {
                                                                                     error!("[{} on server {}] No oneshot channel registered for unbind", connection_information.client_address, connection_information.server_address);
                                                                                 }
 
-                                                                                
                                                                                 last_pdu_was_unbind = true;
                                                                                 break;
-                                                                            },
+                                                                            }
                                                                             Err(error) => {
                                                                                 error!("[{} on server {}] unable to decode unbind_resp: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                                 let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
@@ -867,25 +1379,40 @@ impl SmppClient {
                                                                             }
                                                                         }
                                                                     }
-                                                                }    
-                                                            } else if header.command_id == CommandId::generic_nack as u32 {
-                                                                let mut guard = pending_requests.lock().await;
-                                                                if let Some((time, oneshot)) = guard.remove(&header.sequence_number) {
+                                                                }
+                                                            } else if header.command_id
+                                                                == CommandId::generic_nack as u32
+                                                            {
+                                                                let mut guard =
+                                                                    pending_requests.lock().await;
+                                                                if let Some((time, oneshot)) = guard
+                                                                    .remove(&header.sequence_number)
+                                                                {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
-                                                                    if  lapsed > response_timer.into() {
+                                                                    let lapsed = time
+                                                                        .elapsed()
+                                                                        .expect("Unable to elapse")
+                                                                        .as_millis();
+                                                                    if lapsed
+                                                                        > response_timer.into()
+                                                                    {
                                                                         error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                                                         listener.on_timeout(header.sequence_number, &session_id).await;
                                                                     } else {
-                                                                        match generic_nack::decode(header, &pdu) {
+                                                                        match generic_nack::decode(
+                                                                            header, &pdu,
+                                                                        ) {
                                                                             Ok(generic_nack) => {
                                                                                 info!("[{} on server {}] received generic_nack with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
                                                                                 let connection_information = connection_information.clone();
 
                                                                                 // Send the response to the original sender
-                                                                                if let Some(oneshot) = oneshot {
+                                                                                if let Some(
+                                                                                    oneshot,
+                                                                                ) = oneshot
+                                                                                {
                                                                                     match oneshot.send(Box::new(generic_nack.clone())) {
                                                                                         Ok(_) => {
                                                                                             info!("[{} on server {}] generic_nack sent to original sender", connection_information.client_address, connection_information.server_address);
@@ -897,30 +1424,62 @@ impl SmppClient {
                                                                                 } else {
                                                                                     error!("[{} on server {}] No oneshot channel registered for generic_nack", connection_information.client_address, connection_information.server_address);
                                                                                 }
-                                                                            },
+                                                                            }
                                                                             Err(error) => {
                                                                                 error!("[{} on server {}] unable to decode generic_nack: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                                                                 // Not sending another generic_nack in response to a generic_nack as this would likely create an infinite loop
                                                                             }
                                                                         }
                                                                     }
-                                                                }  else {
+                                                                } else {
                                                                     error!("[{} on server {}] No pending request for sequence_number {}", connection_information.client_address, connection_information.server_address, header.sequence_number);
                                                                 }
                                                             } else {
                                                                 error!("[{} on server {}] received unsupported PDU with command_id {} and sequence_number {}, sending generic_nack", connection_information.client_address, connection_information.server_address, header.command_id, potential_seq_no);
-                                                                let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: SmppError::ESME_RINVCMDID as u32, sequence_number: potential_seq_no };
-                                                                if tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode(), oneshot: None }).await.is_err() {
+                                                                let generic_nack = CommandHeader {
+                                                                    command_length: 16,
+                                                                    command_id:
+                                                                        CommandId::generic_nack
+                                                                            as u32,
+                                                                    command_status:
+                                                                        SmppError::ESME_RINVCMDID
+                                                                            as u32,
+                                                                    sequence_number:
+                                                                        potential_seq_no,
+                                                                };
+                                                                if tx
+                                                                    .send(WriteFrame {
+                                                                        our_sequence_number: None,
+                                                                        pdu: generic_nack.encode(),
+                                                                        oneshot: None,
+                                                                    })
+                                                                    .await
+                                                                    .is_err()
+                                                                {
                                                                     error!("[{} on server {}] writer channel closed, stopping read loop", connection_information.client_address, connection_information.server_address);
                                                                     writer_dead = true;
                                                                     break;
                                                                 }
                                                             }
-                                                        },
+                                                        }
                                                         Err(error) => {
                                                             error!("[{} on server {}] Unable to decode command_header for PDU, sending {:?} in generic_nack", connection_information.client_address, connection_information.server_address, error);
-                                                            let generic_nack = CommandHeader { command_length: 16, command_id: CommandId::generic_nack as u32, command_status: error as u32, sequence_number: potential_seq_no };
-                                                            if tx.send(WriteFrame { our_sequence_number: None, pdu: generic_nack.encode(), oneshot: None }).await.is_err() {
+                                                            let generic_nack = CommandHeader {
+                                                                command_length: 16,
+                                                                command_id: CommandId::generic_nack
+                                                                    as u32,
+                                                                command_status: error as u32,
+                                                                sequence_number: potential_seq_no,
+                                                            };
+                                                            if tx
+                                                                .send(WriteFrame {
+                                                                    our_sequence_number: None,
+                                                                    pdu: generic_nack.encode(),
+                                                                    oneshot: None,
+                                                                })
+                                                                .await
+                                                                .is_err()
+                                                            {
                                                                 error!("[{} on server {}] writer channel closed, stopping read loop", connection_information.client_address, connection_information.server_address);
                                                             }
 
@@ -930,16 +1489,16 @@ impl SmppClient {
                                                         }
                                                     }
 
-                                                    cursor = cursor + pdu_length as usize;
+                                                    cursor += pdu_length as usize;
                                                 }
 
                                                 if last_pdu_was_unbind || writer_dead {
-                                                    break // Break the read loop so we can go to CLOSED state
+                                                    break; // Break the read loop so we can go to CLOSED state
                                                 }
 
                                                 last_read = Instant::now();
 
-                                                // Last thing to do is general time-out detection                            
+                                                // Last thing to do is general time-out detection
                                                 let mut guard = pending_requests.lock().await;
                                                 let mut timed_out_sequences = Vec::new();
 
@@ -959,21 +1518,31 @@ impl SmppClient {
 
                                                 // Notify listeners for timed-out requests
                                                 for sequence_number in timed_out_sequences {
-                                                    listener.on_timeout(sequence_number, &session_id).await;
+                                                    listener
+                                                        .on_timeout(sequence_number, &session_id)
+                                                        .await;
                                                 }
                                             }
-                                        },
-                                        Err(_e) => { /* Nothing to do here as we introduce the interval to not constantly block this thread */ },
+                                        }
+                                        Err(_e) => { /* Nothing to do here as we introduce the interval to not constantly block this thread */
+                                        }
                                         Ok(Err(e)) => {
-                                            error!("[{} on server {}] {} ", connection_information.client_address, connection_information.server_address, e);
-                                            break
-                                        },
+                                            error!(
+                                                "[{} on server {}] {} ",
+                                                connection_information.client_address,
+                                                connection_information.server_address,
+                                                e
+                                            );
+                                            break;
+                                        }
                                     }
 
                                     if enquire_link_ticker.is_finished() {
                                         error!("[{} on server {}] enquire_link thread finished, stopping read loop", connection_information.client_address, connection_information.server_address);
                                         break;
-                                    } else if last_read.elapsed().as_millis() > inactivity_timer.into() {
+                                    } else if last_read.elapsed().as_millis()
+                                        > inactivity_timer.into()
+                                    {
                                         // Please note, it is more likely that the enquire_link timer stopped earlier as it expects a response likely within 2000ms (default) but in some weird scenario that it it's stuck we can always trigger the inactivity timer by keeping
                                         // track of when the last packet was read
                                         error!("[{} on server {}] inactivity_timer triggered after {}ms, closing TCP connection", connection_information.client_address, connection_information.server_address, inactivity_timer);
@@ -985,12 +1554,16 @@ impl SmppClient {
 
                                 listener.on_smsc_unbound(&session_id).await;
 
-                                info!("[{} on server {}] {} going to CLOSED state", connection_information.client_address, connection_information.server_address, bind_type);
+                                info!(
+                                    "[{} on server {}] {} going to CLOSED state",
+                                    connection_information.client_address,
+                                    connection_information.server_address,
+                                    bind_type
+                                );
                                 alive.store(false, Ordering::SeqCst);
 
-                            
                                 //enquire_link_ticker.abort(); // Stop enquiring the link as we are closing the connection
-                                writer_thread.abort(); // Stop allowing the sending of writing of new PDUs 
+                                writer_thread.abort(); // Stop allowing the sending of writing of new PDUs
                             } else {
                                 match header.command_status {
                                     status if status == SmppError::ESME_RINVPASWD as u32 => error!("Bind failed, invalid password, command_id {:#x} command_status {} sequuence_number {}", header.command_id, header.command_status, header.sequence_number),
@@ -999,29 +1572,26 @@ impl SmppClient {
                                     status if status == SmppError::ESME_RBINDFAIL as u32 => error!("Bind failed, generic error, command_id {:#x} command_status {} sequuence_number {}", header.command_id, header.command_status, header.sequence_number),
                                     _ => error!("Bind failed with unknown error, command_id {:#x} command_status {} sequuence_number {}", header.command_id, header.command_status, header.sequence_number),
                                 }
-                                
                             }
-                        },
+                        }
                         Err(_) => error!("Unable to decode bind response"),
                     }
-                },
+                }
                 _ => error!("No bind response from server in {}ms", session_init_timer),
             }
         }));
     }
 
     pub async fn stop(&mut self) {
-
         // We except the user of this code to send unbind before stopping the client
         info!("Stopping smpp client");
         self.alive.store(false, Ordering::SeqCst);
         self.handle
-            .take().expect("Called stop on non-running thread")
+            .take()
+            .expect("Called stop on non-running thread")
             .abort();
     }
 }
-
-
 
 impl Drop for SmppClient {
     fn drop(&mut self) {

@@ -1,10 +1,12 @@
-
-
 use async_trait::async_trait;
 use log::info;
-use smpp34::{SmppConnectionInformation, alert_notification, client::{SMSC, SmppClientListener}, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, unbind, unbind_resp};
+use smpp34::{
+    alert_notification,
+    client::{SmppClientListener, SMSC},
+    data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, unbind, unbind_resp,
+    SmppConnectionInformation,
+};
 use tokio::sync::Mutex;
-
 
 struct TestSmppClientListener {
     pub smscs: Mutex<Vec<SMSC>>,
@@ -12,14 +14,14 @@ struct TestSmppClientListener {
 
 impl TestSmppClientListener {
     pub fn new() -> Self {
-        TestSmppClientListener{
+        TestSmppClientListener {
             smscs: Mutex::new(Vec::new()),
         }
     }
 
     pub async fn unbind(&self) {
         let smscs = self.smscs.lock().await;
-        if let Some(smsc) = smscs.get(0) {
+        if let Some(smsc) = smscs.first() {
             let result = smsc.send_unbind().await;
             match result {
                 Ok(_) => {
@@ -35,71 +37,97 @@ impl TestSmppClientListener {
 
 #[async_trait]
 impl SmppClientListener for TestSmppClientListener {
-
-    async fn on_unbind(&self, request: unbind, _connection_information: &SmppConnectionInformation, _session_id: &String) -> unbind_resp {
+    async fn on_unbind(
+        &self,
+        request: unbind,
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> unbind_resp {
         request.accept()
     }
-    
-    async fn on_deliver_sm(&self, request: deliver_sm, _connection_information: &SmppConnectionInformation, _session_id: &String) -> deliver_sm_resp {
+
+    async fn on_deliver_sm(
+        &self,
+        request: deliver_sm,
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> deliver_sm_resp {
         request.accept()
     }
 
-    async fn on_data_sm(&self, request: data_sm, _connection_information: &SmppConnectionInformation, _session_id: &String) -> data_sm_resp {
+    async fn on_data_sm(
+        &self,
+        request: data_sm,
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> data_sm_resp {
         info!("Received data_sm: {:?}", request);
         request.accept(String::from("1234"))
     }
 
-    async fn on_alert_notification(&self, _request: alert_notification, _connection_information: &SmppConnectionInformation, _session_id: &String) {
-        
+    async fn on_alert_notification(
+        &self,
+        _request: alert_notification,
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) {
     }
-    
-    async fn on_timeout(&self, _sequence_number: u32, _session_id: &String) {
-    }
-    
+
+    async fn on_timeout(&self, _sequence_number: u32, _session_id: &String) {}
+
     async fn on_smsc_bound(&self, smsc: SMSC, _session_id: &String) {
-        info!("SMSC bound for session {} with system_id {} and address {}", _session_id, smsc.system_id, smsc.server_address);
+        info!(
+            "SMSC bound for session {} with system_id {} and address {}",
+            _session_id, smsc.system_id, smsc.server_address
+        );
         self.smscs.lock().await.push(smsc);
     }
-    
+
     async fn on_smsc_unbound(&self, _session_id: &String) {
         info!("SMSC for session {} unbound!", _session_id);
-        self.smscs.lock().await.retain(|smsc| smsc.session_id != *_session_id);
+        self.smscs
+            .lock()
+            .await
+            .retain(|smsc| smsc.session_id != *_session_id);
     }
 }
 
-
-
 mod tests {
-    use std::{sync::Arc, thread, time::Duration};
     use smpp34::client::{SmppClient, BIND_TYPE};
+    use std::{sync::Arc, thread, time::Duration};
 
     use crate::*;
 
     use test_log::test;
 
+    // Live harness: binds to an SMSC on 127.0.0.1:2775 and holds the session
+    // for 10s. Needs a running peer, so it is ignored by default — run it
+    // explicitly with `cargo test -- --ignored` against a local SMSC.
+    #[ignore = "requires a live SMPP server on 127.0.0.1:2775"]
     #[test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
     async fn test_server_bind() {
-
         let listener = Arc::new(TestSmppClientListener::new());
-    
-        let mut client = SmppClient::new("127.0.0.1".to_owned() ,2775, false,
-            BIND_TYPE::TRX, 
-            "username".to_owned(), 
-            "password".to_owned(), 
-            "GATEWAY".to_owned(), 
-            1, 
-            1, 
-            "".to_owned(), 
-            listener.clone(), 
-            20
+
+        let mut client = SmppClient::new(
+            "127.0.0.1".to_owned(),
+            2775,
+            false,
+            BIND_TYPE::TRX,
+            "username".to_owned(),
+            "password".to_owned(),
+            "GATEWAY".to_owned(),
+            1,
+            1,
+            "".to_owned(),
+            listener.clone(),
+            20,
         );
         client.start().await;
 
         thread::sleep(Duration::from_millis(10000));
 
         listener.unbind().await;
-        
-        client.stop().await;
 
+        client.stop().await;
     }
 }
