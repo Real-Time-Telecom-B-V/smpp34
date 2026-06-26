@@ -1,0 +1,8 @@
+# Clippy configuration for smpp34.
+#
+# SMPP PDUs are inherently wide: `submit_sm` and `deliver_sm` each carry 17
+# mandatory fields, so the matching `send_*` constructors take that many
+# arguments by design. The default `too_many_arguments` threshold of 7 would
+# fire on every PDU builder. Raise it to 18 so the lint still flags genuinely
+# egregious signatures while accepting the protocol's natural shape.
+too-many-arguments-threshold = 18

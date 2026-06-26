@@ -1,0 +1,30 @@
+# .github/workflows/audit.yml — RustSec advisory + license/source audit.
+#
+# RustSec advisories are time-varying: a new advisory can land against an
+# unchanged dependency, so this runs on a schedule (and whenever the dependency
+# set changes) rather than gating every PR.
+name: Security audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
