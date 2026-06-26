@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-26
+
 First public release. The crate has existed and been used in production
 privately; this is the initial open-source cut under the MIT license.
 
@@ -28,4 +30,5 @@ privately; this is the initial open-source cut under the MIT license.
 - Removed the unused `tokio-rustls` dependency (the TLS path uses
   `tokio-native-tls`); moved `env_logger` / `test-log` to dev-dependencies.
 
-[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/commits/main
+[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.0.0...main
+[1.0.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.0.0
