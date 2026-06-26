@@ -1,0 +1,22 @@
+# Dependabot — weekly, grouped to keep PR noise low.
+version: 2
+updates:
+  # Rust crate dependencies — one grouped PR for all minor/patch bumps;
+  # major bumps arrive as individual PRs to review deliberately.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Pinned action versions in the workflows (checkout, rust-cache, …).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
