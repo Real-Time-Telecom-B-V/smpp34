@@ -49,7 +49,7 @@ impl outbind {
     ///
     /// * `header` - already decoded Command Header which is only used for validation as outbind should not have a body
     /// * `pdu` - the complete PDU used for extra validation
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<outbind, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<outbind, SmppError> {
         if header.command_id == CommandId::outbind as u32 {
             if pdu.len() >= 18 {
                 // We expect a body of 2 C-Octet-Strings which may be empty

@@ -70,7 +70,7 @@ impl replace_sm {
         }
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<replace_sm, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<replace_sm, SmppError> {
         if pdu.len() < 16 {
             return Err(SmppError::ESME_RINVCMDLEN);
         }
@@ -189,7 +189,7 @@ impl replace_sm_resp {
             .expect("Can not convert command_status to SmppError")
     }
 
-    pub fn decode(header: CommandHeader, _pdu: &Vec<u8>) -> Result<replace_sm_resp, SmppError> {
+    pub fn decode(header: CommandHeader, _pdu: &[u8]) -> Result<replace_sm_resp, SmppError> {
         Ok(replace_sm_resp { header })
     }
 

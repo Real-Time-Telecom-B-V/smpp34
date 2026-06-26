@@ -39,7 +39,7 @@ impl unbind {
     ///
     /// * `header` - already decoded Command Header which is only used for validation as unbind should not have a body
     /// * `pdu` - the complete PDU used for extra validation
-    pub(crate) fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<unbind, SmppError> {
+    pub(crate) fn decode(header: CommandHeader, pdu: &[u8]) -> Result<unbind, SmppError> {
         if header.command_id == CommandId::unbind as u32 {
             if pdu.len() == 16 {
                 Ok(unbind { header })
@@ -142,7 +142,7 @@ impl unbind_resp {
     }
 
     /// Decode a unbind_resp
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<unbind_resp, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<unbind_resp, SmppError> {
         if header.command_id == CommandId::unbind_resp as u32 {
             if pdu.len() == 16 {
                 Ok(unbind_resp { header })

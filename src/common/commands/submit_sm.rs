@@ -130,7 +130,7 @@ impl submit_sm {
         }
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<submit_sm, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<submit_sm, SmppError> {
         if pdu.len() < 16 {
             return Err(SmppError::ESME_RINVCMDLEN);
         }
@@ -328,7 +328,7 @@ impl submit_sm_resp {
         buffer
     }
 
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<submit_sm_resp, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<submit_sm_resp, SmppError> {
         if header.command_status != SmppError::ESME_ROK as u32 {
             // As per specification: "The submit_sm_resp PDU Body is not returned if the command_status field contains a non-zero value."
             Ok(submit_sm_resp {

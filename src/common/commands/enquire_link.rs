@@ -37,7 +37,7 @@ impl enquire_link {
     ///
     /// * `header` - already decoded Command Header which is only used for validation as enquire_link should not have a body
     /// * `pdu` - the complete PDU used for extra validation
-    pub fn decode(header: CommandHeader, pdu: &Vec<u8>) -> Result<enquire_link, SmppError> {
+    pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<enquire_link, SmppError> {
         if header.command_id == CommandId::enquire_link as u32 {
             if pdu.len() == 16 {
                 Ok(enquire_link { header })
