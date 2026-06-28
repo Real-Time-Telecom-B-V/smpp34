@@ -151,8 +151,17 @@ further). Reproduce with `cargo bench` and `perf/docker-compose.yml`.
 
 The SMSC server sustains **625k+ submit_sm/s** even pinned to half the cores;
 past a few sessions the single-box benchmark is bound by the co-located load
-generator, not by smpp34. No CPU profiling has been applied yet — there is clear
-headroom (a `tokio` task + a `to_vec` per PDU). See `scripts/flamegraph.sh`.
+generator, not by smpp34.
+
+### Profiling
+
+A CPU flamegraph of the loopback under load (`scripts/flamegraph.sh`) puts
+**~99.98% of samples in the kernel** (the socket/syscall path) — the user-space
+codec barely appears. smpp34 is **syscall-bound, not CPU-bound**: at these rates
+the cost is the ~600k+ `read`/`write` syscalls per second plus the runtime's
+wakeups, not parsing (the codec runs at millions of PDUs/sec). The remaining
+headroom is therefore **I/O batching** — coalescing writes and cutting wakeups —
+not faster code.
 
 ## Memory
 
