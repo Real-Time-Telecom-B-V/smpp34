@@ -36,14 +36,6 @@ publishes the crate (and the GitHub Release) at `X.Y.Z`.
   behavior.* The contract is "spec-compliant", so a correction toward the
   specification is a fix, not a break. **Document it loudly in the changelog.**
 
-## Pre-1.0
-
-While the crate is `0.x`, Cargo treats a **minor** bump as the breaking
-increment. Breaking API changes therefore ship as `0.(y+1).0` and additive
-changes as `0.y.(z+1)`. Pin a minor version (`smpp34 = "0.1"`) if you need
-stability across `0.x` releases. A `1.0.0` release will lock the API surface to
-the rules above.
-
 ## Pre-releases
 
 `X.Y.Z-rc.N` for validation before a stable tag. The crates.io "newest" pointer

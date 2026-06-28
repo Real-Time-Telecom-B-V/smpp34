@@ -127,6 +127,48 @@ backed by [`tokio-native-tls`](https://crates.io/crates/tokio-native-tls)
 `inactivity` and `response` timers (milliseconds) and the buffer / window size
 explicitly.
 
+## Performance
+
+Measured on a 24-core AMD Ryzen AI 9 HX 370 (single box — the SMSC and ESME are
+co-located, so the load generator competes for cores; separate hosts scale
+further). Reproduce with `cargo bench` and `perf/docker-compose.yml`.
+
+**Codec** — single core, criterion (`cargo bench`):
+
+| Operation | Throughput |
+|---|---:|
+| `submit_sm` decode | ~6.6 M PDU/s |
+| `submit_sm` encode | ~12.3 M PDU/s |
+| `deliver_sm` decode / encode | ~6.8 M / ~12.6 M PDU/s |
+| TLV decode / encode | ~20 M / ~14 M /s |
+
+**End-to-end** — real TCP, full `submit_sm` round-trip (send → `submit_sm_resp`):
+
+| Load | Throughput | Peak RSS |
+|---|---:|---:|
+| 1 ESME, window 64 | ~180k submit_sm/s | 6 MB |
+| 4 ESMEs, window 64 | **~635k submit_sm/s** | 7 MB |
+
+The SMSC server sustains **625k+ submit_sm/s** even pinned to half the cores;
+past a few sessions the single-box benchmark is bound by the co-located load
+generator, not by smpp34. No CPU profiling has been applied yet — there is clear
+headroom (a `tokio` task + a `to_vec` per PDU). See `scripts/flamegraph.sh`.
+
+## Memory
+
+`scripts/mem_leak_test.sh` installs a counting global allocator and asserts
+**live bytes stay flat** (exact — unlike noisy RSS) across both codec round-trips
+and bind/unbind churn. RSS holds at single-digit MB while pushing millions of
+PDUs. (The bind/unbind check found and now guards a real session-teardown leak —
+see the [changelog](CHANGELOG.md).)
+
+## SMPP 3.4 compliance
+
+The PDU / TLV / session support matrix is in
+[`docs/COMPLIANCE.md`](https://github.com/Real-Time-Telecom-B-V/smpp34/blob/main/docs/COMPLIANCE.md);
+[`docs/COMPARISON.md`](https://github.com/Real-Time-Telecom-B-V/smpp34/blob/main/docs/COMPARISON.md)
+maps smpp34 against other SMPP stacks.
+
 ## MSRV
 
 Rust **1.80**.

@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-06-28
+
+### Fixed
+
+- **Framing under pipelined load.** The server and client read loops assumed each
+  TCP read delivered a whole number of complete PDUs (they sliced past the bytes
+  actually read and `clear()`ed the buffer every read), so under pipelining they
+  panicked (`range end index … out of range`) or dropped PDUs. Replaced with an
+  accumulating, length-delimited framer that reassembles PDUs across reads.
+  Found by the new perf harness; guarded by `tests/framing.rs`.
+- **Session-teardown leak.** A client session orphaned its `enquire_link`
+  keep-alive task on close (the abort was commented out), leaking ~4 KB per
+  bind/unbind. Found by the bind/unbind memory-leak check; guarded by
+  `examples/leak_check.rs`.
+
+### Added
+
+- Criterion codec benchmarks (`benches/codec.rs`); a real-TCP perf harness
+  (`examples/perf_smsc` + `perf_esme`, `perf/docker-compose.yml`); a
+  counting-allocator memory-leak check (`examples/leak_check.rs` +
+  `scripts/mem_leak_test.sh`); flamegraph tooling (`examples/perf_loopback` +
+  `scripts/flamegraph.sh`).
+- Performance + memory baselines in the README; SMPP 3.4 compliance matrix
+  (`docs/COMPLIANCE.md`) and a comparison to other SMPP stacks
+  (`docs/COMPARISON.md`).
+
 ## [1.1.0] - 2026-06-26
 
 ### Added
@@ -49,6 +75,7 @@ privately; this is the initial open-source cut under the MIT license.
 - Removed the unused `tokio-rustls` dependency (the TLS path uses
   `tokio-native-tls`); moved `env_logger` / `test-log` to dev-dependencies.
 
-[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.1.0...main
+[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.1.1...main
+[1.1.1]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.0.0

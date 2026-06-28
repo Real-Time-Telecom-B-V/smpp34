@@ -36,3 +36,13 @@ jobs:
 
       - name: Test
         run: cargo test --all-features
+
+      # Keep the benchmarks compiling (they're not gated on machine-dependent
+      # numbers, but they must not rot).
+      - name: Benches compile
+        run: cargo bench --no-run
+
+      # The leak check is deterministic (counting allocator, tight budget) and
+      # DOES gate — it guards the codec and bind/unbind session paths.
+      - name: Memory-leak check
+        run: cargo run --release --example leak_check

@@ -1,6 +1,6 @@
 [package]
 name = "smpp34"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 rust-version = "1.80"
 description = "Pure-Rust SMPP 3.4 codec with an async (tokio) client and server"
@@ -11,7 +11,7 @@ repository = "https://github.com/Real-Time-Telecom-B-V/smpp34"
 homepage = "https://github.com/Real-Time-Telecom-B-V/smpp34"
 keywords = ["smpp", "sms", "smsc", "esme", "telecom"]
 categories = ["network-programming"]
-exclude = [".github/", "docs/"]
+exclude = [".github/", "docs/", "perf/", "scripts/"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -39,6 +39,16 @@ features = [
 # Test-only logging: `test-log` installs a logger per test; it pulls env_logger.
 env_logger = "0.11"
 test-log = "0.2.12"
+criterion = "0.5"
+
+[[bench]]
+name = "codec"
+harness = false
+
+# Optimized build with debug symbols, for flamegraphs (scripts/flamegraph.sh).
+[profile.profiling]
+inherits = "release"
+debug = true
 
 [lints.clippy]
 # Bug-catching tier denied; style/dead-code stay at default warn (CI runs
