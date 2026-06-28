@@ -21,13 +21,15 @@ if [ "$paranoid" -gt 1 ]; then
     echo "      run:  sudo sysctl kernel.perf_event_paranoid=1   (then re-run)"
 fi
 
-export COUNT="${COUNT:-2000000}"
+export COUNT="${COUNT:-500000}"
 export SESSIONS="${SESSIONS:-4}"
 export WINDOW="${WINDOW:-64}"
 
+# Force frame pointers so perf can unwind the optimized stacks (otherwise every
+# frame is [unknown]). This rebuilds deps once. -F 499 + a shorter run keep perf
+# from dropping chunks at these PDU rates.
+export RUSTFLAGS="-C force-frame-pointers=yes ${RUSTFLAGS:-}"
+
 echo "[*] flamegraph: $COUNT submit_sm, $SESSIONS sessions x window $WINDOW"
-# The 'profiling' profile is optimized + debug syms + frame pointers, so perf's
-# frame-pointer unwinding resolves the Rust stacks. -F 499 keeps the sample rate
-# low enough that perf doesn't drop chunks at these PDU rates.
 cargo flamegraph --freq 499 --profile profiling --example perf_loopback --output flamegraph.svg
 echo "[+] wrote flamegraph.svg"

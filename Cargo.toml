@@ -45,13 +45,12 @@ criterion = "0.5"
 name = "codec"
 harness = false
 
-# Optimized build with debug symbols + frame pointers, for flamegraphs
-# (scripts/flamegraph.sh). Without frame pointers perf can't unwind the
-# optimized stacks and every frame resolves to [unknown].
+# Optimized build with debug symbols, for flamegraphs (scripts/flamegraph.sh).
+# Frame pointers (needed so perf can unwind the optimized stacks) are forced via
+# RUSTFLAGS in that script — there is no stable Cargo profile key for them.
 [profile.profiling]
 inherits = "release"
 debug = true
-force-frame-pointers = true
 
 [lints.clippy]
 # Bug-catching tier denied; style/dead-code stay at default warn (CI runs
