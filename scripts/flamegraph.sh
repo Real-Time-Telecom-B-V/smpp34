@@ -26,6 +26,8 @@ export SESSIONS="${SESSIONS:-4}"
 export WINDOW="${WINDOW:-64}"
 
 echo "[*] flamegraph: $COUNT submit_sm, $SESSIONS sessions x window $WINDOW"
-# cargo-flamegraph builds with the 'profiling' profile (optimized + debug syms).
-cargo flamegraph --profile profiling --example perf_loopback --output flamegraph.svg
+# The 'profiling' profile is optimized + debug syms + frame pointers, so perf's
+# frame-pointer unwinding resolves the Rust stacks. -F 499 keeps the sample rate
+# low enough that perf doesn't drop chunks at these PDU rates.
+cargo flamegraph --freq 499 --profile profiling --example perf_loopback --output flamegraph.svg
 echo "[+] wrote flamegraph.svg"
