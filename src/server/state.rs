@@ -181,6 +181,10 @@ async fn read_loop(
     });
 
     let read_timeout = tokio::time::Duration::from_millis(500); // Set a little time-out so we are able to detect if inactivity_timer or enquire_link timers expired
+                                                                // Upper bound on a single PDU's command_length. A length-delimited reader
+                                                                // must reject absurd lengths, or a garbage 4 bytes could drive an unbounded
+                                                                // read waiting for a PDU that never completes.
+    const MAX_PDU_LEN: usize = 1024 * 1024;
     let mut buffer = BytesMut::with_capacity(buffer_size);
     let mut last_read = Instant::now();
 
@@ -205,19 +209,37 @@ async fn read_loop(
         let result = timeout(read_timeout, reader.read_buf(&mut buffer)).await;
         match result {
             Ok(Ok(frame_length)) => {
-                let frame = buffer[0..frame_length].to_vec();
-                if frame_length >= 16 {
-                    // anything else we don't want
+                if frame_length == 0 {
+                    break; // EOF — the peer closed the connection
+                }
+                {
+                    // TCP is a byte stream: `buffer` accumulates across reads.
+                    // Extract every COMPLETE PDU from the front; any partial tail
+                    // is retained for the next read (drained past `cursor` below).
                     let mut cursor = 0;
                     let mut last_pdu_was_unbind = false;
                     let mut writer_dead = false;
-                    while cursor < frame_length && frame_length - cursor >= 16 {
-                        // Only read when we have bytes left in the frame AND at least 16 bytes left in the buffer (we choose to ignore and not decode)
+                    while buffer.len() - cursor >= 16 {
                         let pdu_length: u32 = u32::from_be_bytes(
-                            frame[cursor..cursor + 4]
+                            buffer[cursor..cursor + 4]
                                 .try_into()
                                 .expect("Can not read PDU length"),
                         );
+                        // A length-delimited stream cannot resync from a bogus
+                        // length — reject < 16 or absurdly large as fatal.
+                        if (pdu_length as usize) < 16 || pdu_length as usize > MAX_PDU_LEN {
+                            error!(
+                                "[{} on server {}] invalid PDU command_length {}, closing connection",
+                                connection_information.client_address,
+                                connection_information.server_address, pdu_length
+                            );
+                            writer_dead = true;
+                            break;
+                        }
+                        // Incomplete PDU — wait for the remaining bytes on the next read.
+                        if buffer.len() - cursor < pdu_length as usize {
+                            break;
+                        }
                         let pdu = buffer[cursor..cursor + pdu_length as usize].to_vec();
 
                         // Try read sequence_number in case we need a generic_nack.
@@ -716,6 +738,9 @@ async fn read_loop(
                         cursor += pdu_length as usize;
                     }
 
+                    // Drop the consumed PDUs; keep any partial tail for the next read.
+                    let _ = buffer.split_to(cursor);
+
                     if last_pdu_was_unbind || writer_dead {
                         break; // Break the read loop so we can go to CLOSED state
                     }
@@ -774,8 +799,6 @@ async fn read_loop(
             );
             break;
         }
-
-        buffer.clear(); // Make sure we start reading with an empty buffer
     }
 
     listener.on_esme_unbound(&session_id).await;

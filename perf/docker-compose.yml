@@ -1,0 +1,37 @@
+# smpp34 performance harness — an SMSC and an ESME load generator talking real
+# TCP across two containers. The `esme` fires submit_sm at the `smsc` and prints
+# the achieved aggregate throughput, then exits.
+#
+#   cd perf
+#   SESSIONS=8 COUNT=4000000 WINDOW=64 docker compose up --build --abort-on-container-exit
+#
+# Bump SESSIONS to fan load across more connections (one ESME can't saturate a
+# multi-core SMSC).
+
+services:
+  smsc:
+    build:
+      context: ..
+      dockerfile: perf/Dockerfile
+    command: perf_smsc
+    environment:
+      SMSC_BIND: "0.0.0.0:2775"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/2775' 2>/dev/null || exit 1"]
+      interval: 1s
+      timeout: 1s
+      retries: 15
+
+  esme:
+    build:
+      context: ..
+      dockerfile: perf/Dockerfile
+    command: perf_esme
+    depends_on:
+      smsc:
+        condition: service_healthy
+    environment:
+      SMSC_ADDR: "smsc:2775"
+      SESSIONS: "${SESSIONS:-4}"
+      COUNT: "${COUNT:-2000000}"
+      WINDOW: "${WINDOW:-64}"

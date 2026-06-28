@@ -1076,27 +1076,43 @@ impl SmppClient {
                                     )
                                     .await;
 
+                                // Bound on one PDU's command_length (see server/state.rs).
+                                const MAX_PDU_LEN: usize = 1024 * 1024;
                                 // Main read loop
                                 while alive.load(Ordering::SeqCst) {
                                     let result =
                                         timeout(read_timeout, reader.read_buf(&mut buffer)).await;
                                     match result {
                                         Ok(Ok(frame_length)) => {
-                                            let frame = buffer[0..frame_length].to_vec();
-                                            if frame_length >= 16 {
-                                                // anything else we don't want
+                                            if frame_length == 0 {
+                                                break; // EOF — the peer closed the connection
+                                            }
+                                            {
+                                                // TCP is a byte stream: `buffer` accumulates across
+                                                // reads. Extract every COMPLETE PDU from the front;
+                                                // any partial tail is kept for the next read.
                                                 let mut cursor = 0;
                                                 let mut last_pdu_was_unbind = false;
                                                 let mut writer_dead = false;
-                                                while cursor < frame_length
-                                                    && frame_length - cursor >= 16
-                                                {
-                                                    // Only read when we have bytes left in the frame AND at least 16 bytes left in the buffer (we choose to ignore and not decode)
+                                                while buffer.len() - cursor >= 16 {
                                                     let pdu_length: u32 = u32::from_be_bytes(
-                                                        frame[cursor..cursor + 4]
+                                                        buffer[cursor..cursor + 4]
                                                             .try_into()
                                                             .expect("Can not read PDU length"),
                                                     );
+                                                    // Reject a bogus length — a length-delimited
+                                                    // stream cannot resync from one.
+                                                    if (pdu_length as usize) < 16
+                                                        || pdu_length as usize > MAX_PDU_LEN
+                                                    {
+                                                        error!("[{} on server {}] invalid PDU command_length {}, closing connection", connection_information.client_address, connection_information.server_address, pdu_length);
+                                                        writer_dead = true;
+                                                        break;
+                                                    }
+                                                    // Incomplete PDU — wait for the rest next read.
+                                                    if buffer.len() - cursor < pdu_length as usize {
+                                                        break;
+                                                    }
                                                     let pdu = buffer
                                                         [cursor..cursor + pdu_length as usize]
                                                         .to_vec();
@@ -1670,6 +1686,9 @@ impl SmppClient {
                                                     cursor += pdu_length as usize;
                                                 }
 
+                                                // Drop consumed PDUs; keep any partial tail.
+                                                let _ = buffer.split_to(cursor);
+
                                                 if last_pdu_was_unbind || writer_dead {
                                                     break; // Break the read loop so we can go to CLOSED state
                                                 }
@@ -1726,8 +1745,6 @@ impl SmppClient {
                                         error!("[{} on server {}] inactivity_timer triggered after {}ms, closing TCP connection", connection_information.client_address, connection_information.server_address, inactivity_timer);
                                         break;
                                     }
-
-                                    buffer.clear(); // Make sure we start reading with an empty buffer
                                 }
 
                                 listener.on_smsc_unbound(&session_id).await;
@@ -1740,7 +1757,7 @@ impl SmppClient {
                                 );
                                 alive.store(false, Ordering::SeqCst);
 
-                                //enquire_link_ticker.abort(); // Stop enquiring the link as we are closing the connection
+                                enquire_link_ticker.abort(); // orphaned ticker = per-session leak
                                 writer_thread.abort(); // Stop allowing the sending of writing of new PDUs
                             } else {
                                 match header.command_status {
