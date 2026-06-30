@@ -5,15 +5,15 @@ use crate::{common::parse_c_octet_string_nom, CommandHeader, CommandId, SmppErro
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct cancel_sm {
-    header: CommandHeader,
-    service_type: String,
-    message_id: String,
-    source_addr_ton: u8,
-    source_addr_npi: u8,
-    source_addr: String,
-    dest_addr_ton: u8,
-    dest_addr_npi: u8,
-    destination_addr: String,
+    pub header: CommandHeader,
+    pub service_type: String,
+    pub message_id: String,
+    pub source_addr_ton: u8,
+    pub source_addr_npi: u8,
+    pub source_addr: String,
+    pub dest_addr_ton: u8,
+    pub dest_addr_npi: u8,
+    pub destination_addr: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

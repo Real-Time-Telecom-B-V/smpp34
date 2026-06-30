@@ -4,14 +4,14 @@ use crate::{common::parse_c_octet_string_nom, CommandHeader, CommandId, SmppErro
 
 #[derive(Debug, Clone)]
 pub struct alert_notification {
-    header: CommandHeader,
-    source_addr_ton: u8,
-    source_addr_npi: u8,
-    source_addr: String,
-    esme_addr_ton: u8,
-    esme_addr_npi: u8,
-    esme_addr: String,
-    ms_availability_status: Option<u8>,
+    pub header: CommandHeader,
+    pub source_addr_ton: u8,
+    pub source_addr_npi: u8,
+    pub source_addr: String,
+    pub esme_addr_ton: u8,
+    pub esme_addr_npi: u8,
+    pub esme_addr: String,
+    pub ms_availability_status: Option<u8>,
 }
 
 // Function to parse cancel_sm PDU

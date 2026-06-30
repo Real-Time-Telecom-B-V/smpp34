@@ -1,9 +1,13 @@
 # .github/workflows/ci.yml — smpp34 CI
 #
-# Pure-Rust library: no Python, no system libraries, no network services. So CI
-# is just format + lint + test on stable. Clippy is NOT run with `-D warnings`
-# on purpose — the crate's lint policy lives in `[lints.clippy]` in Cargo.toml
-# (correctness denied; style/dead-code warn), and `cargo clippy` honours it.
+# Two stories from one source tree:
+#   * Rust crate (crates.io): default build is pyo3-free.
+#   * Python wheel (PyPI):    the `python` feature adds the PyO3 bindings.
+#
+# IMPORTANT: never use `--all-features`. That would enable `extension-module`,
+# which tells pyo3 NOT to link libpython and so breaks any Rust test binary.
+# `extension-module` is set only by maturin (the wheel build). We test the
+# pyo3-free default AND `--features python` (which links libpython) separately.
 name: CI
 
 on:
@@ -17,7 +21,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  build-test:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -28,21 +32,84 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # libpython for the `--features python` build/link (abi3 still links libpython
+      # for a non-extension-module test binary).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features
+      # Lint both faces of the crate. Clippy honours [lints.clippy] in Cargo.toml
+      # (correctness denied; style/dead-code warn).
+      - name: Clippy (pyo3-free)
+        run: cargo clippy --all-targets
 
-      - name: Test
-        run: cargo test --all-features
+      - name: Clippy (python feature)
+        run: cargo clippy --all-targets --features python
 
-      # Keep the benchmarks compiling (they're not gated on machine-dependent
-      # numbers, but they must not rot).
+      - name: Test (pyo3-free)
+        run: cargo test
+
+      - name: Test (python feature)
+        run: cargo test --features python
+
+      # Keep the benchmarks compiling (pyo3-free build).
       - name: Benches compile
         run: cargo bench --no-run
 
-      # The leak check is deterministic (counting allocator, tight budget) and
-      # DOES gate — it guards the codec and bind/unbind session paths.
+      # Deterministic counting-allocator leak gate (pyo3-free).
       - name: Memory-leak check
         run: cargo run --release --example leak_check
+
+  # Build the wheel and run the Python test suite (codec parity + async loopback).
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build extension (maturin develop)
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install maturin pytest
+          maturin develop
+
+      - name: Import smoke
+        run: . .venv/bin/activate && python -c "import smpp34; print(smpp34.__version__)"
+
+      - name: pytest
+        run: . .venv/bin/activate && pytest python/tests -q
+
+  # Free-threaded ("no-GIL") smoke. pyo3 >= 0.28 declares gil_used=false, so the
+  # module must import and run the async loopback without re-enabling the GIL.
+  # Allowed to fail for now (toolchain availability), but exercises the no-GIL path.
+  python-freethreaded:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14t"
+
+      - name: Build + test on free-threaded CPython
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install maturin pytest
+          maturin develop --release
+          python -c "import sys, smpp34; assert sys._is_gil_enabled() is False; print('no-GIL OK', smpp34.__version__)"
+          pytest python/tests -q

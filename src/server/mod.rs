@@ -21,9 +21,11 @@ use crate::{
     alert_notification, bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp,
     bind_transmitter, bind_transmitter_resp, cancel_sm, cancel_sm_resp,
     common::{CommandHeader, CommandId, SmppError},
-    data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, generic_nack,
+    data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, generic_nack, query_sm, query_sm_resp,
+    replace_sm, replace_sm_resp,
     server::state::OPEN,
-    submit_sm, submit_sm_resp, unbind, unbind_resp, SmppConnectionInformation, WriteFrame,
+    submit_sm, submit_sm_multi, submit_sm_multi_resp, submit_sm_resp, unbind, unbind_resp,
+    SmppConnectionInformation, WriteFrame,
 };
 
 mod state;
@@ -569,6 +571,14 @@ pub trait SmppServerListener {
     ) -> submit_sm_resp {
         submit_sm.reject(SmppError::ESME_RSYSERR)
     }
+    async fn on_submit_sm_multi(
+        &self,
+        submit_sm_multi: submit_sm_multi,
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> submit_sm_multi_resp {
+        submit_sm_multi.reject(SmppError::ESME_RSYSERR)
+    }
     async fn on_cancel_sm(
         &self,
         cancel_sm: cancel_sm,
@@ -576,6 +586,22 @@ pub trait SmppServerListener {
         _session_id: &String,
     ) -> cancel_sm_resp {
         cancel_sm.reject(SmppError::ESME_RCANCELFAIL)
+    }
+    async fn on_query_sm(
+        &self,
+        query_sm: query_sm,
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> query_sm_resp {
+        query_sm.reject(SmppError::ESME_RQUERYFAIL)
+    }
+    async fn on_replace_sm(
+        &self,
+        replace_sm: replace_sm,
+        _connection_information: &SmppConnectionInformation,
+        _session_id: &String,
+    ) -> replace_sm_resp {
+        replace_sm.reject(SmppError::ESME_RREPLACEFAIL)
     }
     async fn on_data_sm(
         &self,

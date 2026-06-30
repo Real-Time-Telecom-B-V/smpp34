@@ -10,6 +10,14 @@
 #
 # PREREQUISITE for the crates-io job: own `smpp34` on crates.io and configure
 # Trusted Publishing (OIDC) on the crate, pointing at this repo + this workflow.
+#
+# The PyPI wheel jobs (build-wheels*, build-sdist, pypi-publish) are GATED behind
+# the repo variable `PYPI_PUBLISH` (Settings → Variables → Actions). They stay
+# dormant — and crates.io releases keep working — until:
+#   1. RTT has its own PyPI organisation (NOT the `siphon` org), and
+#   2. a pending Trusted Publisher for `smpp34` is configured there pointing at
+#      this repo + workflow + the `pypi` environment, and
+#   3. `PYPI_PUBLISH` is set to `true`.
 name: Release
 
 on:
@@ -73,6 +81,110 @@ jobs:
           path: |
             smpp34-*.spdx.json
             smpp34-*.cdx.json
+
+  # ── PyPI wheels (gated on the PYPI_PUBLISH repo variable; see header) ────────
+  build-wheels:
+    name: wheels ${{ matrix.platform.runner }} ${{ matrix.platform.target }}
+    if: vars.PYPI_PUBLISH == 'true'
+    needs: verify-version
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-latest, target: x86_64 }
+          - { runner: ubuntu-latest, target: aarch64 }
+          - { runner: macos-13, target: x86_64 }
+          - { runner: macos-14, target: aarch64 }
+          - { runner: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      # abi3-py39 (set in Cargo.toml) → one forward-compatible wheel per platform
+      # covering regular CPython 3.9+.
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          manylinux: auto
+          sccache: "true"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
+          path: dist
+
+  build-wheels-freethreaded:
+    name: wheels-ft ${{ matrix.py }} ${{ matrix.platform.runner }}
+    if: vars.PYPI_PUBLISH == 'true'
+    needs: verify-version
+    # A free-threaded interpreter cannot load an abi3 wheel, and abi3t is 3.15+
+    # only — so today's free-threaded builds get version-specific (cp3XXt) wheels.
+    # Best-effort until the toolchain settles; does not block the abi3 wheels.
+    continue-on-error: true
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        py: ["3.13t", "3.14t"]
+        platform:
+          - { runner: ubuntu-latest, target: x86_64 }
+          - { runner: macos-14, target: aarch64 }
+          - { runner: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.py }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter python${{ matrix.py }}
+          manylinux: auto
+          sccache: "true"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-ft-${{ matrix.py }}-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
+          path: dist
+
+  build-sdist:
+    if: vars.PYPI_PUBLISH == 'true'
+    needs: verify-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist
+
+  pypi-publish:
+    name: Publish to PyPI (Trusted Publishing)
+    if: vars.PYPI_PUBLISH == 'true'
+    needs: [build-wheels, build-wheels-freethreaded, build-sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # mint the PyPI publish token via OIDC — no stored secret
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: "wheels-*"
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: "sdist"
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
 
   github-release:
     needs: [crates-io, sbom]
