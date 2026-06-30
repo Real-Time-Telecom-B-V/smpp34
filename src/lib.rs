@@ -21,6 +21,14 @@ pub mod client;
 pub mod common;
 pub mod server;
 
+/// Optional PyO3 bindings (`--features python`). Compiled out of the default,
+/// pyo3-free build that crates.io consumers use.
+#[cfg(feature = "python")]
+pub mod python;
+
+#[cfg(feature = "python")]
+pub use python::register;
+
 pub use server::SmppServer;
 pub use server::SmppServerListener;
 

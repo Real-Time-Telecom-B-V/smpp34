@@ -1,0 +1,36 @@
+# Maturin build config for the `smpp34` wheel. The version is single-sourced from
+# Cargo.toml (`dynamic = ["version"]`), so PyPI and crates.io always ship the same
+# number. `extension-module` is the ONLY place that feature is enabled — never by
+# `cargo test`/`cargo clippy` (it un-links libpython and breaks Rust test binaries).
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "smpp34"
+description = "Rust-backed async SMPP 3.4 client/server + codec for Python asyncio"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Real Time Telecom B.V." }]
+keywords = ["smpp", "sms", "smsc", "esme", "telecom"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Telecommunications Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: Free Threading :: 3 - Stable",
+    "Topic :: Communications",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/Real-Time-Telecom-B-V/smpp34"
+Repository = "https://github.com/Real-Time-Telecom-B-V/smpp34"
+
+[tool.maturin]
+# Mixed layout: compiled ext at `smpp34._smpp34`, pure-Python shim under python/.
+module-name = "smpp34._smpp34"
+python-source = "python"
+features = ["extension-module"]

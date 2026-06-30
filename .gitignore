@@ -1,3 +1,20 @@
 /target
 **/*.rs.bk
 *.pdb
+
+# Profiling artifacts (scripts/flamegraph.sh)
+perf.data
+perf.data.old
+flamegraph.svg
+
+# Python build / test artifacts
+__pycache__/
+*.so
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+*.egg-info/
+
+# Internal planning / request docs (keep out of the public repo)
+dev/

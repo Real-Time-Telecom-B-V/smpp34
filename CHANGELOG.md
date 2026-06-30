@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-28
+
+### Added
+
+- **Python bindings (`pip install smpp34`).** A Rust-backed wheel, built from the
+  same source tree and version, exposing the async client/server to `asyncio` plus
+  a pure codec — additive and behind an optional `python` Cargo feature, so
+  `cargo add smpp34` and crates.io consumers still pull **zero** pyo3.
+  - Async API: `smpp34.Client` / `Smsc` (connect, `submit_sm`, pull inbound
+    `DeliverSmEvent` via `next()`, `unbind`), `smpp34.Server` / `Esme` (`start`,
+    pull `Esme` / `SubmitSmEvent` / `Unbound` via `next()`, `deliver_sm`,
+    `accept`/`reject`). The hot path stays 100% in the Rust/tokio core — Python
+    crosses the GIL once per message via an event-pull bridge (PyO3 +
+    pyo3-async-runtimes).
+  - **Free-threaded ("no-GIL") ready** — the module declares `gil_used = false`
+    and all shared state is `Arc`/channel-based.
+  - Codec API: `SubmitSm` / `DeliverSm` / `RawPdu` classes + `decode()`; abi3
+    wheels (CPython 3.9+) and version-specific free-threaded wheels.
+  - `python/examples/` (client + server) and a Python throughput/leak harness in
+    `python/perf/`, mirroring the Rust `examples/`.
+- Simple Rust samples `examples/client.rs` and `examples/server.rs` showing the
+  full bidirectional flow (submit_sm + deliver_sm).
+- **`query_sm` / `replace_sm` fully wired** (requested by siphon-smpp): server
+  hooks `SmppServerListener::on_query_sm` / `on_replace_sm` (default-reject,
+  dispatched in TX/TRX), and `SMSC::send_query_sm` / `send_replace_sm` with
+  response correlation. Guarded by `tests/query_replace.rs`.
+- `cancel_sm` and `alert_notification` PDU fields are now `pub` (matching
+  `query_sm` / `replace_sm` / `submit_sm`), so inbound handlers can read the
+  message_id / addressing / `ms_availability_status`.
+- `SMSC::can_send()` predicate (mirrors `ESME::can_receive`) to gate outbound
+  sends before a wrong-direction bind would panic.
+- **`submit_sm_multi` fully implemented** (was a stub): the `dest_address` list
+  (`DestAddress::Sme` / `DistributionList`), `submit_sm_multi_resp` with its
+  `unsuccess_sme` failure list (`UnsuccessSme`), `SmppServerListener::on_submit_sm_multi`
+  + dispatch, and `SMSC::send_submit_sm_multi`. Guarded by codec unit tests and
+  the `tests/query_replace.rs` round-trip.
+
+### Changed
+
+- `Cargo.toml`: `crate-type = ["cdylib", "rlib"]` and an optional pyo3 dependency
+  behind `python` / `extension-module` features. CI now lints/tests the default
+  (pyo3-free) build **and** the `python` feature separately — never `--all-features`
+  (which would enable `extension-module` and break the Rust test link).
+
 ## [1.1.1] - 2026-06-28
 
 ### Fixed
@@ -75,7 +119,8 @@ privately; this is the initial open-source cut under the MIT license.
 - Removed the unused `tokio-rustls` dependency (the TLS path uses
   `tokio-native-tls`); moved `env_logger` / `test-log` to dev-dependencies.
 
-[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.1.1...main
+[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.2.0...main
+[1.2.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.2.0
 [1.1.1]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.0.0

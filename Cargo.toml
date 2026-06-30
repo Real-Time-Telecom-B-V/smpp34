@@ -1,6 +1,6 @@
 [package]
 name = "smpp34"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Pure-Rust SMPP 3.4 codec with an async (tokio) client and server"
@@ -11,7 +11,16 @@ repository = "https://github.com/Real-Time-Telecom-B-V/smpp34"
 homepage = "https://github.com/Real-Time-Telecom-B-V/smpp34"
 keywords = ["smpp", "sms", "smsc", "esme", "telecom"]
 categories = ["network-programming"]
-exclude = [".github/", "docs/", "perf/", "scripts/"]
+# Keep CI/build scaffolding out of the crates.io package. `python/` (the wheel's
+# pure-Python shim + pytest) and `pyproject.toml` ship harmlessly, but the test
+# suite under `python/tests/` is dev-only.
+exclude = [".github/", "docs/", "perf/", "scripts/", "python/tests/"]
+
+# cdylib  → maturin/PyO3 build the loadable extension module (the wheel).
+# rlib    → crates.io consumers link this; the cdylib is inert for them.
+# Building both is the standard PyO3 mixed-layout setup (pydantic-core, orjson).
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -26,6 +35,23 @@ chrono = "0.4.38"
 tokio-native-tls = "0.3.1"
 async-trait = "0.1.88"
 downcast-rs = "2.0.1"
+
+# Optional Python bindings (feature = "python"). Kept out of the default build so
+# `cargo add smpp34` and crates.io consumers pull ZERO pyo3. pyo3 >= 0.28 defaults
+# modules to `gil_used = false`, so the extension loads on free-threaded ("no-GIL")
+# CPython without re-enabling the GIL. abi3-py39 → one forward-compatible wheel for
+# regular CPython 3.9+ (free-threaded wheels are built version-specific instead).
+pyo3 = { version = "0.29", optional = true, features = ["abi3-py39"] }
+pyo3-async-runtimes = { version = "0.29", optional = true, features = ["tokio-runtime"] }
+
+[features]
+default = []
+# Links libpython; enables the bindings. Used by `cargo {test,clippy} --features python`.
+python = ["dep:pyo3", "dep:pyo3-async-runtimes"]
+# Wheel-only: maturin sets this. `pyo3/extension-module` tells pyo3 NOT to link
+# libpython, which breaks a Rust test binary — so this is NEVER enabled by
+# `cargo test`/`cargo clippy` (and CI must not use `--all-features`).
+extension-module = ["python", "pyo3/extension-module"]
 
 [dependencies.uuid]
 version = "1.4.0"

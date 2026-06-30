@@ -21,8 +21,8 @@ use tokio::{
 use crate::{
     bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter,
     bind_transmitter_resp, cancel_sm, common::SmppError, data_sm, data_sm_resp, deliver_sm_resp,
-    enquire_link, generic_nack, server::ESME, submit_sm, unbind, CommandHeader, CommandId,
-    SmppReply, SmppServerListener, WriteFrame,
+    enquire_link, generic_nack, query_sm, replace_sm, server::ESME, submit_sm, submit_sm_multi,
+    unbind, CommandHeader, CommandId, SmppReply, SmppServerListener, WriteFrame,
 };
 
 use crate::SmppConnectionInformation;
@@ -305,6 +305,59 @@ async fn read_loop(
                                             }
                                         }
                                     }
+                                } else if header.command_id == CommandId::submit_multi as u32
+                                    && (bound_type == BOUND_TYPE::BOUND_TX
+                                        || bound_type == BOUND_TYPE::BOUND_TRX)
+                                {
+                                    match submit_sm_multi::decode(header, &pdu) {
+                                        Ok(submit_sm_multi) => {
+                                            info!("[{} on server {}] received submit_sm_multi with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                            let handler = listener.clone();
+                                            let conn = connection_information.clone();
+                                            let sid = session_id.clone();
+                                            let tx = tx.clone();
+                                            tokio::spawn(async move {
+                                                let resp = handler
+                                                    .on_submit_sm_multi(
+                                                        submit_sm_multi,
+                                                        &conn,
+                                                        &sid,
+                                                    )
+                                                    .await;
+                                                if let Err(e) = tx
+                                                    .send(WriteFrame {
+                                                        our_sequence_number: None,
+                                                        pdu: resp.encode(),
+                                                        oneshot: None,
+                                                    })
+                                                    .await
+                                                {
+                                                    error!("[{} on server {}] unable to send submit_sm_multi_resp, writer closed: {}", conn.client_address, conn.server_address, e);
+                                                }
+                                            });
+                                        }
+                                        Err(error) => {
+                                            error!("[{} on server {}] unable to decode submit_sm_multi: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
+                                            let error = submit_sm_multi::generic_reject(
+                                                potential_seq_no,
+                                                error,
+                                            )
+                                            .encode();
+                                            if tx
+                                                .send(WriteFrame {
+                                                    our_sequence_number: None,
+                                                    pdu: error,
+                                                    oneshot: None,
+                                                })
+                                                .await
+                                                .is_err()
+                                            {
+                                                error!("[{} on server {}] writer channel closed, stopping read loop", connection_information.client_address, connection_information.server_address);
+                                                writer_dead = true;
+                                                break;
+                                            }
+                                        }
+                                    }
                                 } else if header.command_id == CommandId::data_sm as u32 {
                                     match data_sm::decode(header, &pdu) {
                                         Ok(data_sm) => {
@@ -379,6 +432,100 @@ async fn read_loop(
                                             error!("[{} on server {}] unable to decode cancel_sm: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
                                             let error =
                                                 submit_sm::generic_reject(potential_seq_no, error)
+                                                    .encode();
+                                            if tx
+                                                .send(WriteFrame {
+                                                    our_sequence_number: None,
+                                                    pdu: error,
+                                                    oneshot: None,
+                                                })
+                                                .await
+                                                .is_err()
+                                            {
+                                                error!("[{} on server {}] writer channel closed, stopping read loop", connection_information.client_address, connection_information.server_address);
+                                                writer_dead = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else if header.command_id == CommandId::query_sm as u32
+                                    && (bound_type == BOUND_TYPE::BOUND_TX
+                                        || bound_type == BOUND_TYPE::BOUND_TRX)
+                                {
+                                    match query_sm::decode(header, &pdu) {
+                                        Ok(query_sm) => {
+                                            info!("[{} on server {}] received query_sm with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                            let handler = listener.clone();
+                                            let conn = connection_information.clone();
+                                            let sid = session_id.clone();
+                                            let tx = tx.clone();
+                                            tokio::spawn(async move {
+                                                let resp = handler
+                                                    .on_query_sm(query_sm, &conn, &sid)
+                                                    .await;
+                                                if let Err(e) = tx
+                                                    .send(WriteFrame {
+                                                        our_sequence_number: None,
+                                                        pdu: resp.encode(),
+                                                        oneshot: None,
+                                                    })
+                                                    .await
+                                                {
+                                                    error!("[{} on server {}] unable to send query_sm_resp, writer closed: {}", conn.client_address, conn.server_address, e);
+                                                }
+                                            });
+                                        }
+                                        Err(error) => {
+                                            error!("[{} on server {}] unable to decode query_sm: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
+                                            let error =
+                                                query_sm::generic_reject(potential_seq_no, error)
+                                                    .encode();
+                                            if tx
+                                                .send(WriteFrame {
+                                                    our_sequence_number: None,
+                                                    pdu: error,
+                                                    oneshot: None,
+                                                })
+                                                .await
+                                                .is_err()
+                                            {
+                                                error!("[{} on server {}] writer channel closed, stopping read loop", connection_information.client_address, connection_information.server_address);
+                                                writer_dead = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else if header.command_id == CommandId::replace_sm as u32
+                                    && (bound_type == BOUND_TYPE::BOUND_TX
+                                        || bound_type == BOUND_TYPE::BOUND_TRX)
+                                {
+                                    match replace_sm::decode(header, &pdu) {
+                                        Ok(replace_sm) => {
+                                            info!("[{} on server {}] received replace_sm with sequence_number {}", connection_information.client_address, connection_information.server_address, potential_seq_no);
+                                            let handler = listener.clone();
+                                            let conn = connection_information.clone();
+                                            let sid = session_id.clone();
+                                            let tx = tx.clone();
+                                            tokio::spawn(async move {
+                                                let resp = handler
+                                                    .on_replace_sm(replace_sm, &conn, &sid)
+                                                    .await;
+                                                if let Err(e) = tx
+                                                    .send(WriteFrame {
+                                                        our_sequence_number: None,
+                                                        pdu: resp.encode(),
+                                                        oneshot: None,
+                                                    })
+                                                    .await
+                                                {
+                                                    error!("[{} on server {}] unable to send replace_sm_resp, writer closed: {}", conn.client_address, conn.server_address, e);
+                                                }
+                                            });
+                                        }
+                                        Err(error) => {
+                                            error!("[{} on server {}] unable to decode replace_sm: {:?}, PDU ({} bytes): {:02X?}", connection_information.client_address, connection_information.server_address, error, pdu.len(), pdu);
+                                            let error =
+                                                replace_sm::generic_reject(potential_seq_no, error)
                                                     .encode();
                                             if tx
                                                 .send(WriteFrame {

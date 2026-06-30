@@ -19,12 +19,12 @@ high-level client/server dispatch — drive it via the codec yourself).
 | `enquire_link` / `_resp` | ✅ | ✅ auto keep-alive | ✅ auto keep-alive |
 | `generic_nack` | ✅ | ✅ | ✅ (malformed-PDU reject) |
 | `submit_sm` / `_resp` | ✅ | ✅ send | ✅ dispatch (`on_submit_sm`) |
-| `submit_sm_multi` / `_resp` | ✅ | ◑ | ◑ |
+| `submit_sm_multi` / `_resp` | ✅ | ✅ send | ✅ dispatch (`on_submit_sm_multi`) |
 | `deliver_sm` / `_resp` | ✅ | ✅ dispatch (`on_deliver_sm`) | ✅ send (`ESME::deliver_sm`) |
 | `data_sm` / `_resp` | ✅ | ✅ | ✅ (`on_data_sm`) |
-| `query_sm` / `_resp` | ✅ | ◑ | ◑ |
+| `query_sm` / `_resp` | ✅ | ✅ send | ✅ dispatch (`on_query_sm`) |
 | `cancel_sm` / `_resp` | ✅ | ✅ send | ✅ dispatch (`on_cancel_sm`) |
-| `replace_sm` / `_resp` | ✅ | ◑ | ◑ |
+| `replace_sm` / `_resp` | ✅ | ✅ send | ✅ dispatch (`on_replace_sm`) |
 | `alert_notification` | ✅ | ✅ dispatch (`on_alert_notification`) | ✅ send |
 
 ## Optional parameters / TLVs (§3.2.1, §5.3.2.1)
