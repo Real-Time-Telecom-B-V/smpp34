@@ -24,7 +24,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-num-derive = "0.4.0"
+num-derive = "0.5.1"
 num-traits = "0.2"
 log = "0.4"
 futures = "0.3"
