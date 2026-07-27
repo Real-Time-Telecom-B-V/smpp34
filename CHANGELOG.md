@@ -24,8 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
   rather than waiting out the timer for a PDU that never left.
 - New `tests/response_correlation.rs` drives 20k pipelined requests in each
   direction and asserts every one correlates. Note this guards correlation under
-  load, it does not reproduce the race above on demand (that window is a few
-  nanoseconds wide and did not trigger in 1M+ local requests, contended or not).
+  load, it does not reproduce the race above on demand.
+
+  The race does reproduce, but only with the load pinned to **exactly two CPUs**.
+  One CPU makes tokio run a single worker, which removes the preemption point
+  altogether, and two CPUs under heavy competing load masks it again. Pinned to
+  two CPUs at 5000 pipelined requests per run, 10 of 30 runs lost at least one
+  response on 1.2.0 and 0 of 52 did on 1.2.1. A lost response shows up as
+  `No pending request for sequence_number N` followed, one response timer later,
+  by `... with sequence_number N timed out` for that same N.
 
 ## [1.2.0] - 2026-06-30
 

@@ -8,13 +8,20 @@
 //! write, which closes that window by construction.
 //!
 //! Scope, so this is not mistaken for more than it is: these tests pass both
-//! before and after that reordering. The window they close is a few nanoseconds
-//! wide and did not reproduce locally in 1M+ pipelined requests, contended or
-//! not. What they do guard is that correlation holds under sustained pipelining
-//! in both directions — `client/mod.rs` (ESME -> SMSC, `submit_sm`) and
-//! `server/state.rs` (SMSC -> ESME, `deliver_sm`, the delivery-receipt path) —
-//! so a future change that breaks matching outright, or that reintroduces a
-//! window wide enough to matter, fails here.
+//! before and after that reordering. What they guard is that correlation holds
+//! under sustained pipelining in both directions — `client/mod.rs` (ESME -> SMSC,
+//! `submit_sm`) and `server/state.rs` (SMSC -> ESME, `deliver_sm`, the
+//! delivery-receipt path) — so a future change that breaks matching outright, or
+//! that reintroduces a window wide enough to matter, fails here.
+//!
+//! To exercise the race itself, drive load pinned to **exactly two CPUs**
+//! (`taskset -c 0-1`). That is the one configuration where it shows up: a single
+//! CPU makes tokio run one worker and the preemption point disappears, and two
+//! CPUs under heavy competing load masks it again. Pinned to two CPUs at 5000
+//! pipelined requests per run, 10 of 30 runs lost at least one response before
+//! the reordering and 0 of 52 did after. The signature is
+//! `No pending request for sequence_number N`, then one response timer later
+//! `... with sequence_number N timed out` for that same N.
 
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
