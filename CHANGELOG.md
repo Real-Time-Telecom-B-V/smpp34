@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+### Fixed
+
+- **Register a pending request before its PDU goes on the wire.** Both writer
+  tasks (`client/mod.rs` for ESME to SMSC, `server/state.rs` for SMSC to ESME)
+  inserted into `pending_requests` only after the socket write returned. The read
+  loop drops any response it has no pending entry for, so a response that came
+  back while the writer task sat between its write and its insert was lost, and
+  the caller blocked until its response timer expired (30s by default) instead of
+  getting the `submit_sm_resp` or `deliver_sm_resp` that had already arrived.
+  Registration now happens first, which closes the window by construction. A
+  failed write removes the registration again, so the caller fails immediately
+  rather than waiting out the timer for a PDU that never left.
+- New `tests/response_correlation.rs` drives 20k pipelined requests in each
+  direction and asserts every one correlates. Note this guards correlation under
+  load, it does not reproduce the race above on demand (that window is a few
+  nanoseconds wide and did not trigger in 1M+ local requests, contended or not).
+
 ## [1.2.0] - 2026-06-30
 
 ### Added

@@ -1255,19 +1255,36 @@ impl SmppClient {
                                     );
                                     while writer_alive.load(Ordering::SeqCst) {
                                         if let Some(frame) = rx.recv().await {
+                                            // Register the pending request BEFORE the PDU goes on
+                                            // the wire. The peer's response can be read and matched
+                                            // while this task is still between the write and the
+                                            // insert, and the read loop drops any response it finds
+                                            // no pending entry for — leaving the caller to block
+                                            // until its response timer expires.
+                                            if let Some(our_sequence_number) =
+                                                frame.our_sequence_number
+                                            {
+                                                writer_pending_requests.lock().await.insert(
+                                                    our_sequence_number,
+                                                    (SystemTime::now(), frame.oneshot),
+                                                );
+                                            }
                                             match writer.write(&frame.pdu).await {
-                                                Ok(_) => {
-                                                    if frame.our_sequence_number.is_some() {
-                                                        let mut guard =
-                                                            writer_pending_requests.lock().await;
-                                                        guard.insert(
-                                                            frame.our_sequence_number.unwrap(),
-                                                            (SystemTime::now(), frame.oneshot),
-                                                        );
-                                                    }
-                                                }
+                                                Ok(_) => {}
                                                 Err(e) => {
-                                                    error!("Unable to write to TCP stream {}", e)
+                                                    error!("Unable to write to TCP stream {}", e);
+                                                    // The PDU never left, so no response can ever
+                                                    // arrive. Drop the registration so the caller
+                                                    // fails now instead of waiting out the full
+                                                    // response timer.
+                                                    if let Some(our_sequence_number) =
+                                                        frame.our_sequence_number
+                                                    {
+                                                        writer_pending_requests
+                                                            .lock()
+                                                            .await
+                                                            .remove(&our_sequence_number);
+                                                    }
                                                 }
                                             }
                                         } else {
