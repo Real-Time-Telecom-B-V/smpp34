@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-03
+
 ### Added
 
 - **TLVs can be sent.** Decoding optional parameters always worked (`pdu.tlvs`),
@@ -194,7 +196,8 @@ privately; this is the initial open-source cut under the MIT license.
 - Removed the unused `tokio-rustls` dependency (the TLS path uses
   `tokio-native-tls`); moved `env_logger` / `test-log` to dev-dependencies.
 
-[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.2.1...main
+[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.3.0...main
+[1.3.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.3.0
 [1.2.1]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.2.1
 [1.2.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.2.0
 [1.1.1]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.1.1
