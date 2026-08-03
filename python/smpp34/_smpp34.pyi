@@ -13,6 +13,22 @@ class SmppError(Exception):
     e.g. ``"ESME_RINVPARLEN (0x00000005)"``.
     """
 
+class Tlv:
+    """An SMPP optional parameter: a 2-byte tag and its raw value bytes.
+
+    The tag constants live on the module (``smpp34.TLV_MESSAGE_PAYLOAD``, ...);
+    vendor-specific tags (0x1400-0x3FFF) work just as well, the value is passed
+    through untouched.
+    """
+
+    def __init__(self, tag: int, value: bytes) -> None: ...
+    @property
+    def tag(self) -> int: ...
+    @property
+    def value(self) -> bytes: ...
+    def as_int(self) -> int | None: ...
+    def as_string(self) -> str | None: ...
+
 class SubmitSm:
     """An SMPP ``submit_sm`` PDU (ESME -> SMSC)."""
 
@@ -36,6 +52,7 @@ class SubmitSm:
         replace_if_present_flag: int = ...,
         data_coding: int = ...,
         sm_default_msg_id: int = ...,
+        tlvs: list[Tlv] = ...,
         sequence_number: int = ...,
     ) -> None: ...
     @property
@@ -78,6 +95,8 @@ class SubmitSm:
     def sm_length(self) -> int: ...
     @property
     def short_message(self) -> bytes: ...
+    @property
+    def tlvs(self) -> list[Tlv]: ...
     def encode(self) -> bytes: ...
 
 class DeliverSm:
@@ -103,6 +122,7 @@ class DeliverSm:
         replace_if_present_flag: int = ...,
         data_coding: int = ...,
         sm_default_msg_id: int = ...,
+        tlvs: list[Tlv] = ...,
         sequence_number: int = ...,
     ) -> None: ...
     @property
@@ -145,6 +165,8 @@ class DeliverSm:
     def sm_length(self) -> int: ...
     @property
     def short_message(self) -> bytes: ...
+    @property
+    def tlvs(self) -> list[Tlv]: ...
     def encode(self) -> bytes: ...
 
 class RawPdu:
@@ -168,6 +190,52 @@ def decode(data: bytes) -> SubmitSm | DeliverSm | RawPdu:
     equal the PDU's ``command_length``.
     """
     ...
+
+# SMPP 3.4 optional-parameter tags, for Tlv(tag, value).
+TLV_DEST_ADDR_SUBUNIT: int
+TLV_DEST_NETWORK_TYPE: int
+TLV_DEST_BEARER_TYPE: int
+TLV_DEST_TELEMATICS_ID: int
+TLV_SOURCE_ADDR_SUBUNIT: int
+TLV_SOURCE_NETWORK_TYPE: int
+TLV_SOURCE_BEARER_TYPE: int
+TLV_SOURCE_TELEMATICS_ID: int
+TLV_QOS_TIME_TO_LIVE: int
+TLV_PAYLOAD_TYPE: int
+TLV_ADDITIONAL_STATUS_INFO_TEXT: int
+TLV_RECEIPTED_MESSAGE_ID: int
+TLV_MS_MSG_WAIT_FACILITIES: int
+TLV_PRIVACY_INDICATOR: int
+TLV_SOURCE_SUBADDRESS: int
+TLV_DEST_SUBADDRESS: int
+TLV_USER_MESSAGE_REFERENCE: int
+TLV_USER_RESPONSE_CODE: int
+TLV_SOURCE_PORT: int
+TLV_DESTINATION_PORT: int
+TLV_SAR_MSG_REF_NUM: int
+TLV_LANGUAGE_INDICATOR: int
+TLV_SAR_TOTAL_SEGMENTS: int
+TLV_SAR_SEGMENT_SEQNUM: int
+TLV_SC_INTERFACE_VERSION: int
+TLV_CALLBACK_NUM_PRES_IND: int
+TLV_CALLBACK_NUM_ATAG: int
+TLV_NUMBER_OF_MESSAGES: int
+TLV_CALLBACK_NUM: int
+TLV_DPF_RESULT: int
+TLV_SET_DPF: int
+TLV_MS_AVAILABILITY_STATUS: int
+TLV_NETWORK_ERROR_CODE: int
+TLV_MESSAGE_PAYLOAD: int
+TLV_DELIVERY_FAILURE_REASON: int
+TLV_MORE_MESSAGES_TO_SEND: int
+TLV_MESSAGE_STATE: int
+TLV_USSD_SERVICE_OP: int
+TLV_DISPLAY_TIME: int
+TLV_SMS_SIGNAL: int
+TLV_MS_VALIDITY: int
+TLV_ALERT_ON_MESSAGE_DELIVERY: int
+TLV_ITS_REPLY_TYPE: int
+TLV_ITS_SESSION_INFO: int
 
 # ── Async client / server ───────────────────────────────────────────────────
 # SMPP command_status constants, for SubmitSmEvent.reject(...).
@@ -232,6 +300,8 @@ class DeliverSmEvent:
     def registered_delivery(self) -> int: ...
     @property
     def short_message(self) -> bytes: ...
+    @property
+    def tlvs(self) -> list[Tlv]: ...
 
 class SubmitSmEvent:
     """Inbound ``submit_sm`` (ESME -> SMSC), yielded by ``Server.next()``.
@@ -266,6 +336,8 @@ class SubmitSmEvent:
     def registered_delivery(self) -> int: ...
     @property
     def short_message(self) -> bytes: ...
+    @property
+    def tlvs(self) -> list[Tlv]: ...
     def accept(self, message_id: str) -> None: ...
     def reject(self, command_status: int = ...) -> None: ...
 
@@ -305,6 +377,7 @@ class Smsc:
         replace_if_present_flag: int = ...,
         data_coding: int = ...,
         sm_default_msg_id: int = ...,
+        tlvs: list[Tlv] = ...,
     ) -> SubmitSmResp: ...
     async def next(self) -> DeliverSmEvent | Disconnected: ...
     async def unbind(self) -> None: ...
@@ -362,6 +435,7 @@ class Esme:
         replace_if_present_flag: int = ...,
         data_coding: int = ...,
         sm_default_msg_id: int = ...,
+        tlvs: list[Tlv] = ...,
     ) -> DeliverSmResp: ...
     async def unbind(self) -> None: ...
 

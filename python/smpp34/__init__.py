@@ -24,6 +24,7 @@ from ._smpp34 import (
     SubmitSm,
     SubmitSmEvent,
     SubmitSmResp,
+    Tlv,
     Unbound,
     decode,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "SubmitSm",
     "DeliverSm",
     "RawPdu",
+    "Tlv",
     "SmppError",
     "decode",
     # async client / server
@@ -54,12 +56,13 @@ __all__ = [
     "__version__",
 ]
 
-# Re-export the SMPP command_status constants (ESME_*) defined on the extension
-# module, for use with SubmitSmEvent.reject(...).
+# Re-export the constants defined on the extension module: SMPP command_status
+# (ESME_*) for SubmitSmEvent.reject(...), and the optional-parameter tags
+# (TLV_*) for Tlv(tag, value).
 from . import _smpp34 as _ext  # noqa: E402
 
 for _name in dir(_ext):
-    if _name.startswith("ESME_"):
+    if _name.startswith(("ESME_", "TLV_")):
         globals()[_name] = getattr(_ext, _name)
         __all__.append(_name)
 del _ext, _name

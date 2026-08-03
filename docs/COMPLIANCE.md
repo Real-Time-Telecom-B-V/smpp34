@@ -30,10 +30,29 @@ high-level client/server dispatch — drive it via the codec yourself).
 ## Optional parameters / TLVs (§3.2.1, §5.3.2.1)
 
 Full TLV codec (`encode_tlvs` / `decode_tlvs`, arbitrary tag/value). The 44
-spec-defined tags are enumerated in `TlvTag` (`Tlv::from_tag(TlvTag::…, value)`),
-e.g. `message_payload`, the `sar_*` concatenation set, `sc_interface_version`,
+spec-defined tags are enumerated in `TlvTag` (`Tlv::from_tag(TlvTag::…, value)`,
+plus `from_u8` / `from_u16` / `from_u32` / `from_c_string`), e.g.
+`message_payload`, the `sar_*` concatenation set, `sc_interface_version`,
 `callback_num`, `network_error_code`, `ussd_service_op`, `message_state`, …
 Unknown tags round-trip transparently via `Tlv::new(tag, value)`.
+
+Sending them, both directions:
+
+| Where | How |
+|---|---|
+| `submit_sm` | `smsc.submit_sm().tlv(tag, value)` / `.tlv_raw(0x1403, …)` / `.tlvs(iter)`, or `SMSC::send_submit_sm_pdu` |
+| `deliver_sm` | `esme.deliver_sm().tlv(…)`, or `ESME::send_deliver_sm_pdu` |
+| `data_sm` | `data_sm::new(…).with_tlvs([…])` + `send_data_sm_pdu` (either side) |
+| `submit_sm_multi` | `submit_sm_multi::new(…).with_tlvs([…])` + `SMSC::send_submit_sm_multi_pdu` |
+| `data_sm_resp` | `req.accept(id).with_tlvs([…])` — the only response PDU with optional parameters (§4.2.3) |
+| Python | `tlvs=[Tlv(smpp34.TLV_MESSAGE_PAYLOAD, body)]` on `SubmitSm`/`DeliverSm`, `Smsc.submit_sm()`, `Esme.deliver_sm()` |
+
+`command_length` is recomputed at encode time, so TLVs can be attached in any
+order. Inbound TLVs are on `pdu.tlvs` (`.tlvs` in Python) in wire order.
+
+`alert_notification`'s `ms_availability_status` is encoded as TLV 0x0422 per
+§4.12.1; a bare trailing octet is still accepted on decode (smpp34 ≤ 1.2.1 wrote
+that form).
 
 ## Sessions & data types
 

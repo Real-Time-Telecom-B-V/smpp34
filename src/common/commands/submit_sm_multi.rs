@@ -213,6 +213,23 @@ impl submit_sm_multi {
         pdu
     }
 
+    /// Append optional parameters (TLVs), consuming and returning the PDU so it
+    /// chains off [`new`](submit_sm_multi::new). `command_length` is recomputed
+    /// at encode time, so TLVs can be attached in any order.
+    pub fn with_tlvs(mut self, tlvs: impl IntoIterator<Item = Tlv>) -> Self {
+        self.tlvs.extend(tlvs);
+        self
+    }
+
+    /// Append a single optional parameter (TLV).
+    pub fn push_tlv(&mut self, tlv: Tlv) {
+        self.tlvs.push(tlv);
+    }
+
+    pub(crate) fn set_sequence_number(&mut self, sequence_number: u32) {
+        self.header.sequence_number = sequence_number;
+    }
+
     /// Length of the fixed body + dest list (header included), excluding TLVs.
     fn base_len(&self) -> u32 {
         let dests: usize = self
@@ -544,6 +561,39 @@ mod submit_sm_multi_tests {
             decoded.unsuccess_sme[0].error_status_code,
             SmppError::ESME_RINVDSTADR as u32
         );
+    }
+
+    #[test]
+    fn tlvs_follow_the_short_message() {
+        use crate::common::tlv::{TlvList, TlvTag};
+
+        let pdu = sample().with_tlvs([
+            Tlv::from_tag(TlvTag::SarMsgRefNum, vec![0x00, 0x2A]),
+            Tlv::new(0x1403, vec![0xAA]),
+        ]);
+        let base_len = sample().encode().len();
+        let encoded = pdu.encode();
+
+        // 6 bytes for the 2-octet TLV, 5 for the 1-octet one.
+        assert_eq!(encoded.len(), base_len + 11);
+        assert_eq!(
+            u32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]) as usize,
+            encoded.len(),
+            "command_length must include the optional parameters"
+        );
+        assert_eq!(
+            &encoded[base_len..],
+            &[0x02, 0x0C, 0x00, 0x02, 0x00, 0x2A, 0x14, 0x03, 0x00, 0x01, 0xAA]
+        );
+
+        let header = CommandHeader::decode(&encoded).expect("header");
+        let decoded = submit_sm_multi::decode(header, &encoded).expect("decode");
+        assert_eq!(decoded.tlvs.sar_msg_ref_num(), Some(42));
+        assert_eq!(
+            decoded.tlvs.get_tlv_raw(0x1403).map(|t| t.value.as_slice()),
+            Some([0xAA].as_slice())
+        );
+        assert_eq!(decoded.encode(), encoded);
     }
 
     #[test]

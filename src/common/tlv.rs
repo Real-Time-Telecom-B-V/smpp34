@@ -9,7 +9,7 @@ pub struct Tlv {
     pub value: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromPrimitive)]
 #[repr(u16)]
 pub enum TlvTag {
     DestAddrSubunit = 0x0005,
@@ -58,6 +58,62 @@ pub enum TlvTag {
     ItsSessionInfo = 0x1383,
 }
 
+impl TlvTag {
+    /// Every tag in the SMPP 3.4 optional-parameter table, with its spec name.
+    ///
+    /// Drives the constants exported to Python; `all_tags_are_listed` keeps it
+    /// exhaustive at compile time.
+    pub const ALL: &'static [(&'static str, TlvTag)] = &[
+        ("DEST_ADDR_SUBUNIT", TlvTag::DestAddrSubunit),
+        ("DEST_NETWORK_TYPE", TlvTag::DestNetworkType),
+        ("DEST_BEARER_TYPE", TlvTag::DestBearerType),
+        ("DEST_TELEMATICS_ID", TlvTag::DestTelematicsId),
+        ("SOURCE_ADDR_SUBUNIT", TlvTag::SourceAddrSubunit),
+        ("SOURCE_NETWORK_TYPE", TlvTag::SourceNetworkType),
+        ("SOURCE_BEARER_TYPE", TlvTag::SourceBearerType),
+        ("SOURCE_TELEMATICS_ID", TlvTag::SourceTelematicsId),
+        ("QOS_TIME_TO_LIVE", TlvTag::QosTimeToLive),
+        ("PAYLOAD_TYPE", TlvTag::PayloadType),
+        (
+            "ADDITIONAL_STATUS_INFO_TEXT",
+            TlvTag::AdditionalStatusInfoText,
+        ),
+        ("RECEIPTED_MESSAGE_ID", TlvTag::ReceiptedMessageId),
+        ("MS_MSG_WAIT_FACILITIES", TlvTag::MsMsgWaitFacilities),
+        ("PRIVACY_INDICATOR", TlvTag::PrivacyIndicator),
+        ("SOURCE_SUBADDRESS", TlvTag::SourceSubaddress),
+        ("DEST_SUBADDRESS", TlvTag::DestSubaddress),
+        ("USER_MESSAGE_REFERENCE", TlvTag::UserMessageReference),
+        ("USER_RESPONSE_CODE", TlvTag::UserResponseCode),
+        ("SOURCE_PORT", TlvTag::SourcePort),
+        ("DESTINATION_PORT", TlvTag::DestinationPort),
+        ("SAR_MSG_REF_NUM", TlvTag::SarMsgRefNum),
+        ("LANGUAGE_INDICATOR", TlvTag::LanguageIndicator),
+        ("SAR_TOTAL_SEGMENTS", TlvTag::SarTotalSegments),
+        ("SAR_SEGMENT_SEQNUM", TlvTag::SarSegmentSeqnum),
+        ("SC_INTERFACE_VERSION", TlvTag::ScInterfaceVersion),
+        ("CALLBACK_NUM_PRES_IND", TlvTag::CallbackNumPresInd),
+        ("CALLBACK_NUM_ATAG", TlvTag::CallbackNumAtag),
+        ("NUMBER_OF_MESSAGES", TlvTag::NumberOfMessages),
+        ("CALLBACK_NUM", TlvTag::CallbackNum),
+        ("DPF_RESULT", TlvTag::DpfResult),
+        ("SET_DPF", TlvTag::SetDpf),
+        ("MS_AVAILABILITY_STATUS", TlvTag::MsAvailabilityStatus),
+        ("NETWORK_ERROR_CODE", TlvTag::NetworkErrorCode),
+        ("MESSAGE_PAYLOAD", TlvTag::MessagePayload),
+        ("DELIVERY_FAILURE_REASON", TlvTag::DeliveryFailureReason),
+        ("MORE_MESSAGES_TO_SEND", TlvTag::MoreMessagesToSend),
+        ("MESSAGE_STATE", TlvTag::MessageStateTlv),
+        ("USSD_SERVICE_OP", TlvTag::UssdServiceOp),
+        ("DISPLAY_TIME", TlvTag::DisplayTime),
+        ("SMS_SIGNAL", TlvTag::SmsSignal),
+        ("MS_VALIDITY", TlvTag::MsValidity),
+        ("ALERT_ON_MESSAGE_DELIVERY", TlvTag::AlertOnMessageDelivery),
+        ("ITS_REPLY_TYPE", TlvTag::ItsReplyType),
+        ("ITS_SESSION_INFO", TlvTag::ItsSessionInfo),
+    ];
+}
+
 impl Tlv {
     pub fn new(tag: u16, value: Vec<u8>) -> Self {
         Tlv { tag, value }
@@ -67,6 +123,26 @@ impl Tlv {
             tag: tag as u16,
             value,
         }
+    }
+    /// Single-octet TLV (e.g. `message_state`, `more_messages_to_send`).
+    pub fn from_u8(tag: TlvTag, value: u8) -> Self {
+        Tlv::from_tag(tag, vec![value])
+    }
+    /// Two-octet TLV, network byte order (e.g. `user_message_reference`).
+    pub fn from_u16(tag: TlvTag, value: u16) -> Self {
+        Tlv::from_tag(tag, value.to_be_bytes().to_vec())
+    }
+    /// Four-octet TLV, network byte order (e.g. `qos_time_to_live`).
+    pub fn from_u32(tag: TlvTag, value: u32) -> Self {
+        Tlv::from_tag(tag, value.to_be_bytes().to_vec())
+    }
+    /// C-Octet-String TLV: the value is NUL-terminated on the wire, as §3.2.1.1
+    /// requires for string-typed optional parameters such as
+    /// `receipted_message_id`. Mirrors [`Tlv::as_string`], which strips it again.
+    pub fn from_c_string(tag: TlvTag, value: impl AsRef<str>) -> Self {
+        let mut bytes = value.as_ref().as_bytes().to_vec();
+        bytes.push(0x00);
+        Tlv::from_tag(tag, bytes)
     }
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(4 + self.value.len());
@@ -313,5 +389,67 @@ mod tests {
             b"Hello World".to_vec(),
         )];
         assert_eq!(tlvs.message_payload(), Some(b"Hello World".as_slice()));
+    }
+
+    #[test]
+    fn typed_constructors_match_the_accessors() {
+        assert_eq!(Tlv::from_u8(TlvTag::MessageStateTlv, 2).value, vec![0x02]);
+        assert_eq!(
+            Tlv::from_u16(TlvTag::UserMessageReference, 0x1234).value,
+            vec![0x12, 0x34],
+            "multi-octet TLV values are network byte order (§3.2.1.1)"
+        );
+        assert_eq!(
+            Tlv::from_u32(TlvTag::QosTimeToLive, 0xDEADBEEF).value,
+            vec![0xDE, 0xAD, 0xBE, 0xEF]
+        );
+
+        let tlvs = vec![
+            Tlv::from_u8(TlvTag::MessageStateTlv, 2),
+            Tlv::from_u16(TlvTag::UserMessageReference, 0x1234),
+            Tlv::from_c_string(TlvTag::ReceiptedMessageId, "msg-1"),
+        ];
+        assert_eq!(tlvs.message_state(), Some(2));
+        assert_eq!(tlvs.user_message_reference(), Some(0x1234));
+        assert_eq!(tlvs.receipted_message_id(), Some("msg-1".to_string()));
+    }
+
+    #[test]
+    fn c_string_tlv_is_nul_terminated() {
+        // §3.2.1.1: string-typed optional parameters carry the terminating NUL
+        // inside the TLV length.
+        let tlv = Tlv::from_c_string(TlvTag::ReceiptedMessageId, "msg-1");
+        assert_eq!(tlv.value, b"msg-1\0");
+        assert_eq!(tlv.encode(), b"\x00\x1E\x00\x06msg-1\0");
+    }
+
+    #[test]
+    fn all_tags_are_listed() {
+        // Exhaustive over the value space: any TlvTag variant that is not in
+        // TlvTag::ALL fails here — ALL is what the Python tag constants are
+        // generated from, so a new variant must not silently skip it.
+        for raw in 0u16..=u16::MAX {
+            if let Some(tag) = <TlvTag as num_traits::FromPrimitive>::from_u16(raw) {
+                assert!(
+                    TlvTag::ALL.iter().any(|(_, listed)| *listed == tag),
+                    "TlvTag 0x{raw:04X} ({tag:?}) is missing from TlvTag::ALL"
+                );
+            }
+        }
+        assert_eq!(TlvTag::ALL.len(), 44);
+    }
+
+    #[test]
+    fn tag_names_and_values_are_unique() {
+        for (i, (name, tag)) in TlvTag::ALL.iter().enumerate() {
+            for (other_name, other_tag) in &TlvTag::ALL[i + 1..] {
+                assert_ne!(name, other_name, "duplicate TLV tag name {name}");
+                assert_ne!(
+                    *tag as u16, *other_tag as u16,
+                    "{name} and {other_name} share tag 0x{:04X}",
+                    *tag as u16
+                );
+            }
+        }
     }
 }

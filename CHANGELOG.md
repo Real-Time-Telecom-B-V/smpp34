@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+### Added
+
+- **TLVs can be sent.** Decoding optional parameters always worked (`pdu.tlvs`),
+  but nothing could put one on the wire: `submit_sm::new` / `data_sm::new` were
+  `pub(crate)` and hardcoded an empty TLV list, and no `send_*` method or builder
+  took any. So no `message_payload` past the 254-byte `short_message` limit, no
+  `sar_*` concatenation, no delivery receipt with `receipted_message_id` /
+  `message_state`, no vendor tags.
+  - Builders: `.tlv(TlvTag, value)`, `.tlv_raw(u16, value)`, `.tlvs(iter)` on
+    `SubmitSmBuilder` and `DeliverSmBuilder`.
+  - Pre-built PDUs (relaying a decoded PDU, or anything the fixed-argument
+    `send_*` cannot express): `SMSC::send_submit_sm_pdu` /
+    `send_data_sm_pdu` / `send_submit_sm_multi_pdu`, `ESME::send_deliver_sm_pdu`
+    / `send_data_sm_pdu`. The session assigns the sequence number.
+  - Codec: `submit_sm::new` and `data_sm::new` are now `pub`, and every message
+    PDU has `with_tlvs(iter)` / `push_tlv(tlv)`. `command_length` is recomputed
+    at encode time, so TLVs can be attached in any order.
+  - `Tlv::from_u8` / `from_u16` / `from_u32` / `from_c_string` for the typed
+    values, mirroring the existing `as_*` accessors. `TlvTag::ALL` enumerates the
+    44 spec tags.
+  - Python: `smpp34.Tlv`, a `tlvs=` keyword on `SubmitSm` / `DeliverSm`,
+    `Smsc.submit_sm()` and `Esme.deliver_sm()`, a `.tlvs` property on those and
+    on `SubmitSmEvent` / `DeliverSmEvent`, and the tag constants as
+    `smpp34.TLV_*`.
+- **`data_sm` supports TLVs at all.** It had no `tlvs` field, so it could neither
+  decode nor encode them — and a `data_sm` carries its message *only* in the
+  `message_payload` TLV (§4.2.2), so every `data_sm` this library sent was an
+  empty message and every one it received lost its body. `data_sm_resp` likewise
+  gained TLVs; it is the one response PDU in 3.4 with optional parameters
+  (§4.2.3: `delivery_failure_reason`, `network_error_code`,
+  `additional_status_info_text`, `dpf_result`).
+
+### Fixed
+
+- **`alert_notification` decoded every field 16 bytes off.** Its `decode` parsed
+  from byte 0 while every other PDU's `decode` skips the header itself, and the
+  client read loop hands it the whole PDU — so an inbound `alert_notification`
+  reached `on_alert_notification` with `source_addr_ton` taken from
+  `command_length` and the addresses shredded. It parsed without erroring, which
+  is why it went unnoticed. `decode` now takes a complete PDU like the rest.
+- **`alert_notification` encoded `ms_availability_status` as a bare octet.** It
+  is optional parameter 0x0422 (§4.12.1) and belongs in a TLV, so what went on
+  the wire was malformed and a spec-compliant peer's version was misparsed. It
+  is now TLV-encoded; a lone trailing octet is still accepted on decode, since
+  peers running smpp34 ≤ 1.2.1 emit that form and the two cannot be confused (a
+  TLV is at least 4 bytes).
+- The wrong-bind-direction panic in `SMSC::send_submit_sm` said "Can not send
+  deliver_sm on non RX/TRX bind".
+
 ## [1.2.1] - 2026-07-27
 
 ### Fixed

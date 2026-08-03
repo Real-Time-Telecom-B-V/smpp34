@@ -30,7 +30,7 @@ use crate::common::CommandId;
 use crate::server::{SmppServer, SmppServerListener, ESME};
 use crate::{
     deliver_sm, deliver_sm_resp, submit_sm, submit_sm_resp, CommandHeader,
-    SmppConnectionInformation, SmppError as CoreSmppError,
+    SmppConnectionInformation, SmppError as CoreSmppError, Tlv as CoreTlv, TlvTag as CoreTlvTag,
 };
 
 // ── Error mapping ───────────────────────────────────────────────────────────
@@ -45,6 +45,89 @@ create_exception!(
 
 fn smpp_err(e: CoreSmppError) -> PyErr {
     SmppError::new_err(format!("{e:?} (0x{:08X})", e as u32))
+}
+
+// ── Optional parameters (TLVs) ──────────────────────────────────────────────
+/// An SMPP optional parameter: a 2-byte tag and its raw value bytes.
+///
+/// The tag constants are on the module (`smpp34.TLV_MESSAGE_PAYLOAD`, …); any
+/// other tag, including vendor-specific ones (0x1400-0x3FFF), works just as well
+/// since the value is passed through untouched.
+///
+/// ```python
+/// Tlv(smpp34.TLV_USER_MESSAGE_REFERENCE, (42).to_bytes(2, "big"))
+/// ```
+// `from_py_object` is what lets a Python list of Tlv be extracted as `Vec<Tlv>`
+// in the `tlvs=` arguments; pyo3 is making that opt-in, so ask for it explicitly.
+#[pyclass(module = "smpp34._smpp34", from_py_object)]
+#[derive(Clone)]
+pub struct Tlv {
+    inner: CoreTlv,
+}
+
+#[pymethods]
+impl Tlv {
+    #[new]
+    fn new(tag: u16, value: Vec<u8>) -> Self {
+        Tlv {
+            inner: CoreTlv::new(tag, value),
+        }
+    }
+
+    #[getter]
+    fn tag(&self) -> u16 {
+        self.inner.tag
+    }
+
+    #[getter]
+    fn value<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.value)
+    }
+
+    /// The value as a network-byte-order unsigned integer, for the 1/2/4-octet
+    /// TLVs (`message_state`, `user_message_reference`, `qos_time_to_live`, …).
+    /// `None` if the value is not 1, 2 or 4 bytes long.
+    fn as_int(&self) -> Option<u32> {
+        match self.inner.value.len() {
+            1 => self.inner.as_u8().map(u32::from),
+            2 => self.inner.as_u16().map(u32::from),
+            4 => self.inner.as_u32(),
+            _ => None,
+        }
+    }
+
+    /// The value as a string, with the trailing NUL of a C-Octet-String stripped.
+    /// `None` if it is not valid UTF-8.
+    fn as_string(&self) -> Option<String> {
+        self.inner.as_string()
+    }
+
+    fn __eq__(&self, other: &Tlv) -> bool {
+        self.inner == other.inner
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Tlv(tag=0x{:04x}, value={:?})",
+            self.inner.tag, self.inner.value
+        )
+    }
+}
+
+impl From<CoreTlv> for Tlv {
+    fn from(inner: CoreTlv) -> Self {
+        Tlv { inner }
+    }
+}
+
+/// Python list -> the core TLV list the codec takes.
+fn into_core_tlvs(tlvs: Vec<Tlv>) -> Vec<CoreTlv> {
+    tlvs.into_iter().map(|t| t.inner).collect()
+}
+
+/// Core TLV list -> Python list.
+fn from_core_tlvs(tlvs: &[CoreTlv]) -> Vec<Tlv> {
+    tlvs.iter().cloned().map(Tlv::from).collect()
 }
 
 // ── Message PDUs (submit_sm / deliver_sm — structurally identical) ───────────
@@ -85,6 +168,7 @@ macro_rules! message_pdu {
                 replace_if_present_flag = 0,
                 data_coding = 0,
                 sm_default_msg_id = 0,
+                tlvs = Vec::new(),
                 sequence_number = 1,
             ))]
             fn new(
@@ -105,6 +189,7 @@ macro_rules! message_pdu {
                 replace_if_present_flag: u8,
                 data_coding: u8,
                 sm_default_msg_id: u8,
+                tlvs: Vec<Tlv>,
                 sequence_number: u32,
             ) -> PyResult<Self> {
                 if short_message.len() > 254 {
@@ -131,7 +216,8 @@ macro_rules! message_pdu {
                     data_coding,
                     sm_default_msg_id,
                     short_message,
-                );
+                )
+                .with_tlvs(into_core_tlvs(tlvs));
                 Ok(Self {
                     inner,
                     sequence_number,
@@ -218,6 +304,12 @@ macro_rules! message_pdu {
             #[getter]
             fn short_message<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
                 PyBytes::new(py, &self.inner.short_message)
+            }
+
+            /// The optional parameters (TLVs), in wire order.
+            #[getter]
+            fn tlvs(&self) -> Vec<Tlv> {
+                from_core_tlvs(&self.inner.tlvs)
             }
 
             /// Encode to wire bytes (a complete SMPP PDU, header + body).
@@ -456,6 +548,13 @@ impl DeliverSmEvent {
         PyBytes::new(py, &self.inner.short_message)
     }
 
+    /// The optional parameters (TLVs) the SMSC sent, in wire order. A delivery
+    /// receipt carries its state here (`receipted_message_id`, `message_state`).
+    #[getter]
+    fn tlvs(&self) -> Vec<Tlv> {
+        from_core_tlvs(&self.inner.tlvs)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "DeliverSmEvent(src={:?}, dst={:?}, dcs=0x{:02x}, len={})",
@@ -540,6 +639,12 @@ impl SubmitSmEvent {
     #[getter]
     fn short_message<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.req.short_message)
+    }
+
+    /// The optional parameters (TLVs) the ESME sent, in wire order.
+    #[getter]
+    fn tlvs(&self) -> Vec<Tlv> {
+        from_core_tlvs(&self.req.tlvs)
     }
 
     /// Accept the message, returning the given SMSC-assigned message_id.
@@ -793,6 +898,7 @@ impl Smsc {
         replace_if_present_flag = 0,
         data_coding = 0,
         sm_default_msg_id = 0,
+        tlvs = Vec::new(),
     ))]
     fn submit_sm<'py>(
         &self,
@@ -814,31 +920,34 @@ impl Smsc {
         replace_if_present_flag: u8,
         data_coding: u8,
         sm_default_msg_id: u8,
+        tlvs: Vec<Tlv>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let smsc = self.inner.clone();
+        let tlvs = into_core_tlvs(tlvs);
         future_into_py(py, async move {
-            match smsc
-                .send_submit_sm(
-                    service_type,
-                    source_addr_ton,
-                    source_addr_npi,
-                    source_addr,
-                    dest_addr_ton,
-                    dest_addr_npi,
-                    destination_addr,
-                    esm_class,
-                    protocol_id,
-                    priority_flag,
-                    schedule_delivery_time,
-                    validity_period,
-                    registered_delivery,
-                    replace_if_present_flag,
-                    data_coding,
-                    sm_default_msg_id,
-                    short_message,
-                )
-                .await
-            {
+            // The sequence number is assigned by the session, not here.
+            let pdu = submit_sm::new(
+                0,
+                service_type,
+                source_addr_ton,
+                source_addr_npi,
+                source_addr,
+                dest_addr_ton,
+                dest_addr_npi,
+                destination_addr,
+                esm_class,
+                protocol_id,
+                priority_flag,
+                schedule_delivery_time,
+                validity_period,
+                registered_delivery,
+                replace_if_present_flag,
+                data_coding,
+                sm_default_msg_id,
+                short_message,
+            )
+            .with_tlvs(tlvs);
+            match smsc.send_submit_sm_pdu(pdu).await {
                 Ok(resp) => Ok(SubmitSmResp {
                     message_id: resp.message_id.clone(),
                     command_status: resp.command_status(),
@@ -1122,6 +1231,7 @@ impl Esme {
         replace_if_present_flag = 0,
         data_coding = 0,
         sm_default_msg_id = 0,
+        tlvs = Vec::new(),
     ))]
     fn deliver_sm<'py>(
         &self,
@@ -1143,31 +1253,34 @@ impl Esme {
         replace_if_present_flag: u8,
         data_coding: u8,
         sm_default_msg_id: u8,
+        tlvs: Vec<Tlv>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let esme = self.inner.clone();
+        let tlvs = into_core_tlvs(tlvs);
         future_into_py(py, async move {
-            match esme
-                .send_deliver_sm(
-                    service_type,
-                    source_addr_ton,
-                    source_addr_npi,
-                    source_addr,
-                    dest_addr_ton,
-                    dest_addr_npi,
-                    destination_addr,
-                    esm_class,
-                    protocol_id,
-                    priority_flag,
-                    schedule_delivery_time,
-                    validity_period,
-                    registered_delivery,
-                    replace_if_present_flag,
-                    data_coding,
-                    sm_default_msg_id,
-                    short_message,
-                )
-                .await
-            {
+            // The sequence number is assigned by the session, not here.
+            let pdu = deliver_sm::new(
+                0,
+                service_type,
+                source_addr_ton,
+                source_addr_npi,
+                source_addr,
+                dest_addr_ton,
+                dest_addr_npi,
+                destination_addr,
+                esm_class,
+                protocol_id,
+                priority_flag,
+                schedule_delivery_time,
+                validity_period,
+                registered_delivery,
+                replace_if_present_flag,
+                data_coding,
+                sm_default_msg_id,
+                short_message,
+            )
+            .with_tlvs(tlvs);
+            match esme.send_deliver_sm_pdu(pdu).await {
                 Ok(resp) => Ok(DeliverSmResp {
                     command_status: resp.command_status(),
                 }),
@@ -1238,6 +1351,7 @@ fn add_contents(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SubmitSm>()?;
     m.add_class::<DeliverSm>()?;
     m.add_class::<RawPdu>()?;
+    m.add_class::<Tlv>()?;
     m.add_function(wrap_pyfunction!(decode, m)?)?;
     // Async client/server
     m.add_class::<Client>()?;
@@ -1253,6 +1367,11 @@ fn add_contents(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Common SMPP command_status constants (for reject()).
     for (name, code) in ERROR_CODES {
         m.add(*name, *code)?;
+    }
+    // TLV tag constants (TLV_MESSAGE_PAYLOAD, …), straight off the SMPP 3.4
+    // optional-parameter table in the core.
+    for (name, tag) in CoreTlvTag::ALL {
+        m.add(format!("TLV_{name}").as_str(), *tag as u16)?;
     }
     Ok(())
 }

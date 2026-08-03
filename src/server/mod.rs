@@ -25,7 +25,7 @@ use crate::{
     replace_sm, replace_sm_resp,
     server::state::OPEN,
     submit_sm, submit_sm_multi, submit_sm_multi_resp, submit_sm_resp, unbind, unbind_resp,
-    SmppConnectionInformation, WriteFrame,
+    SmppConnectionInformation, Tlv, TlvTag, WriteFrame,
 };
 
 mod state;
@@ -85,28 +85,47 @@ impl ESME {
         sm_default_msg_id: u8,
         short_message: Vec<u8>,
     ) -> Result<deliver_sm_resp, SmppError> {
+        self.send_deliver_sm_pdu(deliver_sm::new(
+            0, // overwritten by send_deliver_sm_pdu, which owns the sequence space
+            service_type,
+            source_addr_ton,
+            source_addr_npi,
+            source_addr,
+            dest_addr_ton,
+            dest_addr_npi,
+            destination_addr,
+            esm_class,
+            protocol_id,
+            priority_flag,
+            schedule_delivery_time,
+            validity_period,
+            registered_delivery,
+            replace_if_present_flag,
+            data_coding,
+            sm_default_msg_id,
+            short_message,
+        ))
+        .await
+    }
+
+    /// Send a pre-built `deliver_sm` and await its response.
+    ///
+    /// This is the path for anything the fixed-argument
+    /// [`send_deliver_sm`](ESME::send_deliver_sm) cannot express — above all
+    /// optional parameters (TLVs), which a delivery receipt needs
+    /// (`receipted_message_id`, `message_state`, `network_error_code`). Attach
+    /// them with [`deliver_sm::with_tlvs`] / [`deliver_sm::push_tlv`], or use the
+    /// fluent [`ESME::deliver_sm`] builder.
+    ///
+    /// The session assigns the sequence number: whatever the PDU carries is
+    /// overwritten, so responses correlate against this session's window.
+    pub async fn send_deliver_sm_pdu(
+        &self,
+        mut deliver_sm: deliver_sm,
+    ) -> Result<deliver_sm_resp, SmppError> {
         if self.can_receive {
             let sequence_number = self.next_sequence_number();
-            let deliver_sm = deliver_sm::new(
-                sequence_number,
-                service_type,
-                source_addr_ton,
-                source_addr_npi,
-                source_addr,
-                dest_addr_ton,
-                dest_addr_npi,
-                destination_addr,
-                esm_class,
-                protocol_id,
-                priority_flag,
-                schedule_delivery_time,
-                validity_period,
-                registered_delivery,
-                replace_if_present_flag,
-                data_coding,
-                sm_default_msg_id,
-                short_message,
-            );
+            deliver_sm.set_sequence_number(sequence_number);
             info!(
                 "[{} on server {}] sending deliver_sm with sequence_number {}",
                 self.client_address, self.server_address, sequence_number
@@ -241,9 +260,8 @@ impl ESME {
         registered_delivery: u8,
         data_coding: u8,
     ) -> Result<data_sm_resp, SmppError> {
-        let sequence_number = self.next_sequence_number();
-        let data_sm = data_sm::new(
-            sequence_number,
+        self.send_data_sm_pdu(data_sm::new(
+            0, // overwritten by send_data_sm_pdu, which owns the sequence space
             service_type,
             source_addr_ton,
             source_addr_npi,
@@ -254,7 +272,22 @@ impl ESME {
             esm_class,
             registered_delivery,
             data_coding,
-        );
+        ))
+        .await
+    }
+
+    /// Send a pre-built `data_sm` and await its response.
+    ///
+    /// `data_sm` has no `short_message` field: the message body travels in the
+    /// `message_payload` TLV (§4.2.2), so this is the only way to send one that
+    /// actually carries a message. Attach the TLVs with
+    /// [`data_sm::with_tlvs`] / [`data_sm::push_tlv`].
+    ///
+    /// The session assigns the sequence number: whatever the PDU carries is
+    /// overwritten, so responses correlate against this session's window.
+    pub async fn send_data_sm_pdu(&self, mut data_sm: data_sm) -> Result<data_sm_resp, SmppError> {
+        let sequence_number = self.next_sequence_number();
+        data_sm.set_sequence_number(sequence_number);
         info!(
             "[{} on server {}] sending data_sm with sequence_number {}",
             self.client_address, self.server_address, sequence_number
@@ -375,6 +408,7 @@ impl ESME {
 ///     .source_addr("31600000000")
 ///     .destination_addr("12345")
 ///     .short_message(b"hello")
+///     .tlv(TlvTag::ReceiptedMessageId, "msg-1\0")
 ///     .send()
 ///     .await?;
 /// ```
@@ -397,6 +431,7 @@ pub struct DeliverSmBuilder<'a> {
     data_coding: u8,
     sm_default_msg_id: u8,
     short_message: Vec<u8>,
+    tlvs: Vec<Tlv>,
 }
 
 impl<'a> DeliverSmBuilder<'a> {
@@ -420,6 +455,7 @@ impl<'a> DeliverSmBuilder<'a> {
             data_coding: 0,
             sm_default_msg_id: 0,
             short_message: Vec::new(),
+            tlvs: Vec::new(),
         }
     }
 
@@ -492,27 +528,52 @@ impl<'a> DeliverSmBuilder<'a> {
         self
     }
 
+    /// Append an optional parameter (TLV) from the SMPP 3.4 table, e.g.
+    /// `.tlv(TlvTag::MessageStateTlv, [2])`. Multi-octet values are network byte
+    /// order — `42u16.to_be_bytes()`, not `42u16.to_le_bytes()`.
+    pub fn tlv(mut self, tag: TlvTag, value: impl Into<Vec<u8>>) -> Self {
+        self.tlvs.push(Tlv::from_tag(tag, value.into()));
+        self
+    }
+
+    /// Append an optional parameter by raw tag — for vendor-specific parameters
+    /// (0x1400-0x3FFF) and anything else outside [`TlvTag`].
+    pub fn tlv_raw(mut self, tag: u16, value: impl Into<Vec<u8>>) -> Self {
+        self.tlvs.push(Tlv::new(tag, value.into()));
+        self
+    }
+
+    /// Append several optional parameters at once.
+    pub fn tlvs(mut self, tlvs: impl IntoIterator<Item = Tlv>) -> Self {
+        self.tlvs.extend(tlvs);
+        self
+    }
+
     /// Send the assembled `deliver_sm` on the session and await its response.
     pub async fn send(self) -> Result<deliver_sm_resp, SmppError> {
         self.esme
-            .send_deliver_sm(
-                self.service_type,
-                self.source_addr_ton,
-                self.source_addr_npi,
-                self.source_addr,
-                self.dest_addr_ton,
-                self.dest_addr_npi,
-                self.destination_addr,
-                self.esm_class,
-                self.protocol_id,
-                self.priority_flag,
-                self.schedule_delivery_time,
-                self.validity_period,
-                self.registered_delivery,
-                self.replace_if_present_flag,
-                self.data_coding,
-                self.sm_default_msg_id,
-                self.short_message,
+            .send_deliver_sm_pdu(
+                deliver_sm::new(
+                    0, // assigned by the session
+                    self.service_type,
+                    self.source_addr_ton,
+                    self.source_addr_npi,
+                    self.source_addr,
+                    self.dest_addr_ton,
+                    self.dest_addr_npi,
+                    self.destination_addr,
+                    self.esm_class,
+                    self.protocol_id,
+                    self.priority_flag,
+                    self.schedule_delivery_time,
+                    self.validity_period,
+                    self.registered_delivery,
+                    self.replace_if_present_flag,
+                    self.data_coding,
+                    self.sm_default_msg_id,
+                    self.short_message,
+                )
+                .with_tlvs(self.tlvs),
             )
             .await
     }

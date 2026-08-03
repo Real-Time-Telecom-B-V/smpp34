@@ -67,6 +67,15 @@ fn message_command_length(
 }
 
 impl deliver_sm {
+    /// Build a `deliver_sm`. The optional parameters start out empty — attach
+    /// them with [`with_tlvs`](deliver_sm::with_tlvs) / [`push_tlv`](deliver_sm::push_tlv),
+    /// or use the [`DeliverSmBuilder`](crate::server::DeliverSmBuilder) returned
+    /// by `ESME::deliver_sm()`. A delivery receipt carries its state in the
+    /// `receipted_message_id` / `message_state` TLVs.
+    ///
+    /// `sequence_number` is ignored when the PDU is handed to
+    /// [`ESME::send_deliver_sm_pdu`](crate::server::ESME::send_deliver_sm_pdu):
+    /// the session owns the sequence space and overwrites it.
     pub fn new(
         sequence_number: u32,
         service_type: String,
@@ -128,6 +137,23 @@ impl deliver_sm {
             short_message,
             tlvs: Vec::new(),
         }
+    }
+
+    /// Append optional parameters (TLVs), consuming and returning the PDU so it
+    /// chains off [`new`](deliver_sm::new). `command_length` is recomputed at
+    /// encode time, so TLVs can be attached in any order.
+    pub fn with_tlvs(mut self, tlvs: impl IntoIterator<Item = Tlv>) -> Self {
+        self.tlvs.extend(tlvs);
+        self
+    }
+
+    /// Append a single optional parameter (TLV).
+    pub fn push_tlv(&mut self, tlv: Tlv) {
+        self.tlvs.push(tlv);
+    }
+
+    pub(crate) fn set_sequence_number(&mut self, sequence_number: u32) {
+        self.header.sequence_number = sequence_number;
     }
 
     pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<deliver_sm, SmppError> {
@@ -344,3 +370,98 @@ impl deliver_sm_resp {
 }
 
 impl SmppReply for deliver_sm_resp {}
+
+#[cfg(test)]
+mod deliver_sm_tlv_tests {
+    use super::*;
+    use crate::common::tlv::{TlvList, TlvTag};
+
+    /// A delivery receipt as an SMSC actually sends it (SMPP 3.4 §4.6.1 +
+    /// Appendix B): `esm_class` 0x04, empty `short_message`, and the receipt
+    /// carried in the `receipted_message_id` / `message_state` TLVs.
+    fn known_answer() -> Vec<u8> {
+        vec![
+            0x00, 0x00, 0x00, 0x40, // command_length = 64
+            0x00, 0x00, 0x00, 0x05, // command_id = deliver_sm
+            0x00, 0x00, 0x00, 0x00, // command_status
+            0x00, 0x00, 0x00, 0x09, // sequence_number
+            0x00, // service_type (NULL)
+            0x01, // source_addr_ton
+            0x01, // source_addr_npi
+            b'3', b'1', b'6', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0',
+            0x00, // source_addr
+            0x01, // dest_addr_ton
+            0x01, // dest_addr_npi
+            b'1', b'2', b'3', b'4', b'5', 0x00, // destination_addr
+            0x04, // esm_class = delivery receipt
+            0x00, // protocol_id
+            0x00, // priority_flag
+            0x00, // schedule_delivery_time (NULL)
+            0x00, // validity_period (NULL)
+            0x00, // registered_delivery
+            0x00, // replace_if_present_flag
+            0x00, // data_coding
+            0x00, // sm_default_msg_id
+            0x00, // sm_length
+            0x00, 0x1E, 0x00, 0x06, b'm', b's', b'g', b'-', b'1',
+            0x00, // TLV receipted_message_id
+            0x04, 0x27, 0x00, 0x01, 0x02, // TLV message_state = DELIVERED
+        ]
+    }
+
+    fn sample() -> deliver_sm {
+        deliver_sm::new(
+            9,
+            String::new(),
+            1,
+            1,
+            "31600000000".to_string(),
+            1,
+            1,
+            "12345".to_string(),
+            0x04,
+            0,
+            0,
+            String::new(),
+            String::new(),
+            0,
+            0,
+            0,
+            0,
+            Vec::new(),
+        )
+        .with_tlvs([
+            Tlv::from_tag(TlvTag::ReceiptedMessageId, b"msg-1\0".to_vec()),
+            Tlv::from_tag(TlvTag::MessageStateTlv, vec![0x02]),
+        ])
+    }
+
+    #[test]
+    fn encodes_a_delivery_receipt_to_the_spec_wire_image() {
+        assert_eq!(sample().encode(), known_answer());
+    }
+
+    #[test]
+    fn decodes_a_delivery_receipt_from_the_spec_wire_image() {
+        let pdu = known_answer();
+        let header = CommandHeader::decode(&pdu).expect("header");
+        let decoded = deliver_sm::decode(header, &pdu).expect("decode");
+
+        assert!(decoded.short_message.is_empty());
+        assert_eq!(decoded.tlvs.len(), 2);
+        assert_eq!(
+            decoded.tlvs.receipted_message_id(),
+            Some("msg-1".to_string())
+        );
+        assert_eq!(decoded.tlvs.message_state(), Some(2));
+    }
+
+    #[test]
+    fn command_length_covers_the_tlvs() {
+        let encoded = sample().encode();
+        assert_eq!(
+            u32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]) as usize,
+            encoded.len()
+        );
+    }
+}
