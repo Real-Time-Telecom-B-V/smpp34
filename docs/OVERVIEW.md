@@ -11,7 +11,7 @@ for protocol coverage see [COMPLIANCE.md](COMPLIANCE.md).
 | `src/lib.rs` | Crate root; re-exports the public surface. |
 | `src/common/mod.rs` | `CommandHeader`, `SmppError` (the SMPP status enum), `DeliveryReceipt`, the (crate-internal) `CommandId`, connection types, and shared decode helpers. |
 | `src/common/commands/*.rs` | One module per PDU: struct + `encode`/`decode` + `accept`/`reject` builders. Covers the full SMPP 3.4 command set. |
-| `src/common/tlv.rs` | TLV (optional parameter) codec: `Tlv`, `TlvTag`, `TlvList`, `encode_tlvs`/`decode_tlvs`. |
+| `src/common/tlv.rs` | TLV (optional parameter) codec: `Tlv`, `TlvTag` (+ `TlvTag::ALL`), `TlvList`, `encode_tlvs`/`decode_tlvs`. |
 | `src/client/mod.rs` | `SmppClient` (ESME), the bound `SMSC` handle + `SubmitSmBuilder`, `SmppClientListener`, `BIND_TYPE`, and the `SmppConnection` (TCP/TLS) transport. |
 | `src/server/mod.rs` | `SmppServer` (SMSC), the bound `ESME` handle + `DeliverSmBuilder`, `SmppServerListener`. |
 | `src/server/state.rs` | Per-session server state machine + read loop. |
@@ -35,12 +35,15 @@ can't resync from a bogus length).
 ## Public API surface (the SemVer contract)
 
 - **Client:** `SmppClient::new` / `new_with_default_timers`, `start`, `stop`,
-  `is_alive`; `SMSC::submit_sm()` builder (+ `send_submit_sm` / `send_data_sm` /
-  `send_cancel_sm` / `send_unbind`); `SmppClientListener` (all methods defaulted);
+  `is_alive`; `SMSC::submit_sm()` builder, with `.tlv()` / `.tlvs()` (+
+  `send_submit_sm` / `send_data_sm` / `send_cancel_sm` / `send_unbind`, and the
+  `send_*_pdu` variants that take a pre-built PDU, TLVs and all);
+  `SmppClientListener` (all methods defaulted);
   `BIND_TYPE`.
 - **Server:** `SmppServer::new` / `new_with_default_timers`, `start`, `stop`,
-  `is_alive`; `ESME::deliver_sm()` builder (+ `send_deliver_sm` / `send_data_sm` /
-  `send_alert_notification` / `send_unbind`); `SmppServerListener` (all methods
+  `is_alive`; `ESME::deliver_sm()` builder, with `.tlv()` / `.tlvs()` (+
+  `send_deliver_sm` / `send_data_sm` / `send_alert_notification` / `send_unbind`,
+  and the `send_*_pdu` variants); `SmppServerListener` (all methods
   defaulted — override only what you need).
 - **Codec:** every PDU struct + `SmppError`, `SmppConnectionInformation`, the TLV
   API. PDU `decode` takes `&[u8]`.

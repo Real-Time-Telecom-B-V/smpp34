@@ -35,6 +35,12 @@ async def main() -> None:
                     destination_addr=ev.source_addr,
                     esm_class=0x04,  # delivery receipt
                     short_message=b"id:msg-1 stat:DELIVRD",
+                    # The machine-readable half of a receipt: the text above is
+                    # Appendix B, these are the optional parameters.
+                    tlvs=[
+                        smpp34.Tlv(smpp34.TLV_RECEIPTED_MESSAGE_ID, b"msg-1\x00"),
+                        smpp34.Tlv(smpp34.TLV_MESSAGE_STATE, b"\x02"),  # DELIVERED
+                    ],
                 )
         elif isinstance(ev, smpp34.Unbound):
             sessions.pop(ev.session_id, None)

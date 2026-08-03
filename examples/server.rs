@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use smpp34::server::ESME;
 use smpp34::{
     bind_transceiver, bind_transceiver_resp, submit_sm, submit_sm_resp, SmppConnectionInformation,
-    SmppServer, SmppServerListener,
+    SmppServer, SmppServerListener, TlvTag,
 };
 use tokio::sync::Mutex;
 
@@ -68,6 +68,10 @@ impl SmppServerListener for Handler {
                     .destination_addr(dst)
                     .esm_class(0x04) // delivery receipt
                     .short_message(b"id:msg-1 stat:DELIVRD")
+                    // The machine-readable half of a receipt: the text above is
+                    // Appendix B, these are the optional parameters (§4.6.1).
+                    .tlv(TlvTag::ReceiptedMessageId, b"msg-1\0".to_vec())
+                    .tlv(TlvTag::MessageStateTlv, [2]) // DELIVERED
                     .send()
                     .await;
             });

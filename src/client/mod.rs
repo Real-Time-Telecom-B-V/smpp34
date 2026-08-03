@@ -31,7 +31,7 @@ use crate::{
     cancel_sm_resp, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, enquire_link, generic_nack,
     query_sm, query_sm_resp, replace_sm, replace_sm_resp, submit_sm, submit_sm_multi,
     submit_sm_multi_resp, submit_sm_resp, unbind, unbind_resp, CommandHeader, CommandId,
-    DestAddress, SmppConnectionInformation, SmppError, SmppReply, WriteFrame,
+    DestAddress, SmppConnectionInformation, SmppError, SmppReply, Tlv, TlvTag, WriteFrame,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,28 +111,47 @@ impl SMSC {
         sm_default_msg_id: u8,
         short_message: Vec<u8>,
     ) -> Result<submit_sm_resp, SmppError> {
+        self.send_submit_sm_pdu(submit_sm::new(
+            0, // overwritten by send_submit_sm_pdu, which owns the sequence space
+            service_type,
+            source_addr_ton,
+            source_addr_npi,
+            source_addr,
+            dest_addr_ton,
+            dest_addr_npi,
+            destination_addr,
+            esm_class,
+            protocol_id,
+            priority_flag,
+            schedule_delivery_time,
+            validity_period,
+            registered_delivery,
+            replace_if_present_flag,
+            data_coding,
+            sm_default_msg_id,
+            short_message,
+        ))
+        .await
+    }
+
+    /// Send a pre-built `submit_sm` and await its response.
+    ///
+    /// This is the path for anything the fixed-argument
+    /// [`send_submit_sm`](SMSC::send_submit_sm) cannot express — above all
+    /// optional parameters (TLVs), which the caller attaches with
+    /// [`submit_sm::with_tlvs`] / [`submit_sm::push_tlv`] — and for relaying a
+    /// PDU that was decoded elsewhere. [`SMSC::submit_sm`] wraps it in a fluent
+    /// builder.
+    ///
+    /// The session assigns the sequence number: whatever the PDU carries is
+    /// overwritten, so responses correlate against this session's window.
+    pub async fn send_submit_sm_pdu(
+        &self,
+        mut submit_sm: submit_sm,
+    ) -> Result<submit_sm_resp, SmppError> {
         if self.can_send {
             let sequence_number = self.next_sequence_number();
-            let submit_sm = submit_sm::new(
-                sequence_number,
-                service_type,
-                source_addr_ton,
-                source_addr_npi,
-                source_addr,
-                dest_addr_ton,
-                dest_addr_npi,
-                destination_addr,
-                esm_class,
-                protocol_id,
-                priority_flag,
-                schedule_delivery_time,
-                validity_period,
-                registered_delivery,
-                replace_if_present_flag,
-                data_coding,
-                sm_default_msg_id,
-                short_message,
-            );
+            submit_sm.set_sequence_number(sequence_number);
             info!(
                 "[{} on server {}] sending submit_sm with sequence_number {}",
                 self.client_address, self.server_address, sequence_number
@@ -194,7 +213,7 @@ impl SMSC {
                 }
             }
         } else {
-            panic!("Can not send deliver_sm on non RX/TRX bind");
+            panic!("Can not send submit_sm on non TX/TRX bind");
         }
     }
 
@@ -273,21 +292,35 @@ impl SMSC {
         registered_delivery: u8,
         data_coding: u8,
     ) -> Result<data_sm_resp, SmppError> {
+        self.send_data_sm_pdu(data_sm::new(
+            0, // overwritten by send_data_sm_pdu, which owns the sequence space
+            service_type,
+            source_addr_ton,
+            source_addr_npi,
+            source_addr,
+            dest_addr_ton,
+            dest_addr_npi,
+            destination_addr,
+            esm_class,
+            registered_delivery,
+            data_coding,
+        ))
+        .await
+    }
+
+    /// Send a pre-built `data_sm` and await its response.
+    ///
+    /// `data_sm` has no `short_message` field: the message body travels in the
+    /// `message_payload` TLV (§4.2.2), so this is the only way to send one that
+    /// actually carries a message. Attach the TLVs with
+    /// [`data_sm::with_tlvs`] / [`data_sm::push_tlv`].
+    ///
+    /// The session assigns the sequence number: whatever the PDU carries is
+    /// overwritten, so responses correlate against this session's window.
+    pub async fn send_data_sm_pdu(&self, mut data_sm: data_sm) -> Result<data_sm_resp, SmppError> {
         if self.can_send {
             let sequence_number = self.next_sequence_number();
-            let data_sm = data_sm::new(
-                sequence_number,
-                service_type,
-                source_addr_ton,
-                source_addr_npi,
-                source_addr,
-                dest_addr_ton,
-                dest_addr_npi,
-                destination_addr,
-                esm_class,
-                registered_delivery,
-                data_coding,
-            );
+            data_sm.set_sequence_number(sequence_number);
             info!(
                 "[{} on server {}] sending data_sm with sequence_number {}",
                 self.client_address, self.server_address, sequence_number
@@ -633,26 +666,40 @@ impl SMSC {
         sm_default_msg_id: u8,
         short_message: Vec<u8>,
     ) -> Result<submit_sm_multi_resp, SmppError> {
+        self.send_submit_sm_multi_pdu(submit_sm_multi::new(
+            0, // overwritten by send_submit_sm_multi_pdu, which owns the sequence space
+            service_type,
+            source_addr_ton,
+            source_addr_npi,
+            source_addr,
+            dest_addresses,
+            esm_class,
+            protocol_id,
+            priority_flag,
+            schedule_delivery_time,
+            validity_period,
+            registered_delivery,
+            replace_if_present_flag,
+            data_coding,
+            sm_default_msg_id,
+            short_message,
+        ))
+        .await
+    }
+
+    /// Send a pre-built `submit_sm_multi` and await its response — the path for
+    /// attaching optional parameters (TLVs) with
+    /// [`submit_sm_multi::with_tlvs`] / [`submit_sm_multi::push_tlv`].
+    ///
+    /// The session assigns the sequence number: whatever the PDU carries is
+    /// overwritten, so responses correlate against this session's window.
+    pub async fn send_submit_sm_multi_pdu(
+        &self,
+        mut submit_sm_multi: submit_sm_multi,
+    ) -> Result<submit_sm_multi_resp, SmppError> {
         if self.can_send {
             let sequence_number = self.next_sequence_number();
-            let submit_sm_multi = submit_sm_multi::new(
-                sequence_number,
-                service_type,
-                source_addr_ton,
-                source_addr_npi,
-                source_addr,
-                dest_addresses,
-                esm_class,
-                protocol_id,
-                priority_flag,
-                schedule_delivery_time,
-                validity_period,
-                registered_delivery,
-                replace_if_present_flag,
-                data_coding,
-                sm_default_msg_id,
-                short_message,
-            );
+            submit_sm_multi.set_sequence_number(sequence_number);
             info!(
                 "[{} on server {}] sending submit_sm_multi with sequence_number {}",
                 self.client_address, self.server_address, sequence_number
@@ -736,6 +783,7 @@ impl SMSC {
 ///     .destination_addr("31600000000")
 ///     .short_message(b"hello")
 ///     .registered_delivery(1)
+///     .tlv(TlvTag::UserMessageReference, 42u16.to_be_bytes())
 ///     .send()
 ///     .await?;
 /// ```
@@ -758,6 +806,7 @@ pub struct SubmitSmBuilder<'a> {
     data_coding: u8,
     sm_default_msg_id: u8,
     short_message: Vec<u8>,
+    tlvs: Vec<Tlv>,
 }
 
 impl<'a> SubmitSmBuilder<'a> {
@@ -781,6 +830,7 @@ impl<'a> SubmitSmBuilder<'a> {
             data_coding: 0,
             sm_default_msg_id: 0,
             short_message: Vec::new(),
+            tlvs: Vec::new(),
         }
     }
 
@@ -853,27 +903,52 @@ impl<'a> SubmitSmBuilder<'a> {
         self
     }
 
+    /// Append an optional parameter (TLV) from the SMPP 3.4 table, e.g.
+    /// `.tlv(TlvTag::MessagePayload, body)`. Multi-octet values are network byte
+    /// order — `42u16.to_be_bytes()`, not `42u16.to_le_bytes()`.
+    pub fn tlv(mut self, tag: TlvTag, value: impl Into<Vec<u8>>) -> Self {
+        self.tlvs.push(Tlv::from_tag(tag, value.into()));
+        self
+    }
+
+    /// Append an optional parameter by raw tag — for vendor-specific parameters
+    /// (0x1400-0x3FFF) and anything else outside [`TlvTag`].
+    pub fn tlv_raw(mut self, tag: u16, value: impl Into<Vec<u8>>) -> Self {
+        self.tlvs.push(Tlv::new(tag, value.into()));
+        self
+    }
+
+    /// Append several optional parameters at once.
+    pub fn tlvs(mut self, tlvs: impl IntoIterator<Item = Tlv>) -> Self {
+        self.tlvs.extend(tlvs);
+        self
+    }
+
     /// Send the assembled `submit_sm` on the session and await its response.
     pub async fn send(self) -> Result<submit_sm_resp, SmppError> {
         self.smsc
-            .send_submit_sm(
-                self.service_type,
-                self.source_addr_ton,
-                self.source_addr_npi,
-                self.source_addr,
-                self.dest_addr_ton,
-                self.dest_addr_npi,
-                self.destination_addr,
-                self.esm_class,
-                self.protocol_id,
-                self.priority_flag,
-                self.schedule_delivery_time,
-                self.validity_period,
-                self.registered_delivery,
-                self.replace_if_present_flag,
-                self.data_coding,
-                self.sm_default_msg_id,
-                self.short_message,
+            .send_submit_sm_pdu(
+                submit_sm::new(
+                    0, // assigned by the session
+                    self.service_type,
+                    self.source_addr_ton,
+                    self.source_addr_npi,
+                    self.source_addr,
+                    self.dest_addr_ton,
+                    self.dest_addr_npi,
+                    self.destination_addr,
+                    self.esm_class,
+                    self.protocol_id,
+                    self.priority_flag,
+                    self.schedule_delivery_time,
+                    self.validity_period,
+                    self.registered_delivery,
+                    self.replace_if_present_flag,
+                    self.data_coding,
+                    self.sm_default_msg_id,
+                    self.short_message,
+                )
+                .with_tlvs(self.tlvs),
             )
             .await
     }

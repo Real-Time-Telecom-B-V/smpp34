@@ -67,7 +67,15 @@ fn message_command_length(
 }
 
 impl submit_sm {
-    pub(crate) fn new(
+    /// Build a `submit_sm`. The optional parameters start out empty — attach
+    /// them with [`with_tlvs`](submit_sm::with_tlvs) / [`push_tlv`](submit_sm::push_tlv),
+    /// or use the [`SubmitSmBuilder`](crate::client::SubmitSmBuilder) returned by
+    /// `SMSC::submit_sm()`.
+    ///
+    /// `sequence_number` is ignored when the PDU is handed to
+    /// [`SMSC::send_submit_sm_pdu`](crate::client::SMSC::send_submit_sm_pdu):
+    /// the session owns the sequence space and overwrites it.
+    pub fn new(
         sequence_number: u32,
         service_type: String,
         source_addr_ton: u8,
@@ -128,6 +136,23 @@ impl submit_sm {
             short_message,
             tlvs: Vec::new(),
         }
+    }
+
+    /// Append optional parameters (TLVs), consuming and returning the PDU so it
+    /// chains off [`new`](submit_sm::new). `command_length` is recomputed at
+    /// encode time, so TLVs can be attached in any order.
+    pub fn with_tlvs(mut self, tlvs: impl IntoIterator<Item = Tlv>) -> Self {
+        self.tlvs.extend(tlvs);
+        self
+    }
+
+    /// Append a single optional parameter (TLV).
+    pub fn push_tlv(&mut self, tlv: Tlv) {
+        self.tlvs.push(tlv);
+    }
+
+    pub(crate) fn set_sequence_number(&mut self, sequence_number: u32) {
+        self.header.sequence_number = sequence_number;
     }
 
     pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<submit_sm, SmppError> {
@@ -348,3 +373,155 @@ impl submit_sm_resp {
 }
 
 impl SmppReply for submit_sm_resp {}
+
+#[cfg(test)]
+mod submit_sm_tlv_tests {
+    use super::*;
+    use crate::common::tlv::{TlvList, TlvTag};
+
+    /// Hand-built wire image (SMPP 3.4 §4.4.1): mandatory body followed by two
+    /// optional parameters — `user_message_reference` (0x0204) and a vendor tag
+    /// outside the spec table.
+    fn known_answer() -> Vec<u8> {
+        vec![
+            0x00, 0x00, 0x00, 0x38, // command_length = 56
+            0x00, 0x00, 0x00, 0x04, // command_id = submit_sm
+            0x00, 0x00, 0x00, 0x00, // command_status
+            0x12, 0x34, 0x56, 0x78, // sequence_number
+            0x00, // service_type (NULL)
+            0x01, // source_addr_ton
+            0x01, // source_addr_npi
+            b'1', b'2', b'3', b'4', b'5', 0x00, // source_addr
+            0x01, // dest_addr_ton
+            0x01, // dest_addr_npi
+            b'9', b'9', b'9', 0x00, // destination_addr
+            0x00, // esm_class
+            0x00, // protocol_id
+            0x00, // priority_flag
+            0x00, // schedule_delivery_time (NULL)
+            0x00, // validity_period (NULL)
+            0x01, // registered_delivery
+            0x00, // replace_if_present_flag
+            0x00, // data_coding
+            0x00, // sm_default_msg_id
+            0x02, // sm_length
+            b'h', b'i', // short_message
+            0x02, 0x04, 0x00, 0x02, 0x12, 0x34, // TLV user_message_reference
+            0x14, 0x03, 0x00, 0x03, 0xAA, 0xBB, 0xCC, // TLV vendor-specific
+        ]
+    }
+
+    fn sample() -> submit_sm {
+        submit_sm::new(
+            0x12345678,
+            String::new(),
+            1,
+            1,
+            "12345".to_string(),
+            1,
+            1,
+            "999".to_string(),
+            0,
+            0,
+            0,
+            String::new(),
+            String::new(),
+            1,
+            0,
+            0,
+            0,
+            b"hi".to_vec(),
+        )
+        .with_tlvs([
+            Tlv::from_tag(TlvTag::UserMessageReference, vec![0x12, 0x34]),
+            Tlv::new(0x1403, vec![0xAA, 0xBB, 0xCC]),
+        ])
+    }
+
+    #[test]
+    fn encodes_tlvs_to_the_spec_wire_image() {
+        assert_eq!(sample().encode(), known_answer());
+    }
+
+    #[test]
+    fn command_length_covers_the_tlvs() {
+        let encoded = sample().encode();
+        assert_eq!(
+            u32::from_be_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]) as usize,
+            encoded.len(),
+            "command_length must include the optional parameters"
+        );
+    }
+
+    #[test]
+    fn decodes_tlvs_from_the_spec_wire_image() {
+        let pdu = known_answer();
+        let header = CommandHeader::decode(&pdu).expect("header");
+        let decoded = submit_sm::decode(header, &pdu).expect("decode");
+
+        assert_eq!(decoded.short_message, b"hi");
+        assert_eq!(decoded.tlvs.len(), 2);
+        assert_eq!(decoded.tlvs.user_message_reference(), Some(0x1234));
+        assert_eq!(
+            decoded.tlvs.get_tlv_raw(0x1403).map(|t| t.value.as_slice()),
+            Some([0xAA, 0xBB, 0xCC].as_slice())
+        );
+    }
+
+    #[test]
+    fn without_tlvs_the_body_ends_at_the_short_message() {
+        let encoded = submit_sm::new(
+            0x12345678,
+            String::new(),
+            1,
+            1,
+            "12345".to_string(),
+            1,
+            1,
+            "999".to_string(),
+            0,
+            0,
+            0,
+            String::new(),
+            String::new(),
+            1,
+            0,
+            0,
+            0,
+            b"hi".to_vec(),
+        )
+        .encode();
+        // 56 minus the 13 TLV bytes.
+        assert_eq!(encoded.len(), 43);
+        assert_eq!(encoded[3], 43);
+    }
+
+    #[test]
+    fn push_tlv_appends_in_order() {
+        let mut pdu = submit_sm::new(
+            1,
+            String::new(),
+            0,
+            0,
+            String::new(),
+            0,
+            0,
+            String::new(),
+            0,
+            0,
+            0,
+            String::new(),
+            String::new(),
+            0,
+            0,
+            0,
+            0,
+            Vec::new(),
+        );
+        pdu.push_tlv(Tlv::from_tag(TlvTag::SarMsgRefNum, vec![0x00, 0x01]));
+        pdu.push_tlv(Tlv::from_tag(TlvTag::SarTotalSegments, vec![0x02]));
+        assert_eq!(pdu.tlvs.len(), 2);
+        assert_eq!(pdu.tlvs[0].tag, TlvTag::SarMsgRefNum as u16);
+        assert_eq!(pdu.tlvs[1].tag, TlvTag::SarTotalSegments as u16);
+    }
+}

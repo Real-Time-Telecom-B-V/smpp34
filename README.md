@@ -193,6 +193,64 @@ equivalents in [`examples/`](examples) — `client.rs` / `server.rs`). A through
 and leak harness lives in [`python/perf/`](python/perf), mirroring the Rust
 `examples/{perf_loopback,leak_check}.rs`.
 
+## Optional parameters (TLVs)
+
+Inbound TLVs are on `pdu.tlvs` in wire order, with typed accessors from the
+`TlvList` trait. Outbound, the builders take them directly:
+
+```rust,ignore
+use smpp34::{Tlv, TlvTag, TlvList};
+
+// ESME -> SMSC
+smsc.submit_sm()
+    .source_addr("12345")
+    .destination_addr("31600000000")
+    .tlv(TlvTag::MessagePayload, "a body past the 254-byte short_message limit")
+    .tlv(TlvTag::UserMessageReference, 42u16.to_be_bytes())
+    .tlv_raw(0x1403, [0xAA, 0xBB])          // vendor-specific tag
+    .send().await?;
+
+// SMSC -> ESME: a delivery receipt is TLVs, nothing else
+esme.deliver_sm()
+    .source_addr("31600000000")
+    .destination_addr("12345")
+    .esm_class(0x04)
+    .tlvs([
+        Tlv::from_c_string(TlvTag::ReceiptedMessageId, "abc"),
+        Tlv::from_u8(TlvTag::MessageStateTlv, 2),   // DELIVERED
+    ])
+    .send().await?;
+
+// reading, on either side
+let dlr_id = request.tlvs.receipted_message_id();
+```
+
+For a PDU built up front (relaying a decoded one, or `data_sm`, whose message
+body *only* exists as the `message_payload` TLV) use the `*_pdu` send methods —
+the session assigns the sequence number:
+
+```rust,ignore
+let pdu = data_sm::new(0, String::new(), 1, 1, "12345".into(), 1, 1, "31600000000".into(), 0, 0, 8)
+    .with_tlvs([Tlv::from_tag(TlvTag::MessagePayload, body)]);
+smsc.send_data_sm_pdu(pdu).await?;
+```
+
+In Python, `tlvs=` takes a list of `Tlv(tag, value)` and the tag constants are on
+the module:
+
+```python
+await smsc.submit_sm("31600000000", b"hi", source_addr="12345", tlvs=[
+    smpp34.Tlv(smpp34.TLV_USER_MESSAGE_REFERENCE, (42).to_bytes(2, "big")),
+    smpp34.Tlv(smpp34.TLV_MESSAGE_PAYLOAD, b"the real body"),
+])
+
+ev = await smsc.next()
+print([(hex(t.tag), t.value) for t in ev.tlvs])
+```
+
+All 44 spec-defined tags are in `TlvTag` / `smpp34.TLV_*`; unknown and
+vendor-specific tags (0x1400-0x3FFF) pass through byte for byte.
+
 ## TLS
 
 Pass `tls = true` to `SmppClient::new` to bind over TLS. The TLS transport is
