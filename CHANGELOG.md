@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed connect is reported instead of panicking a tokio worker.**
+  `SmppClient::start` opened its socket inside the spawned session task and
+  `.unwrap()`ed the result, so an ordinary refused connect panicked a runtime
+  worker. The panic did not even settle the pending bind — the listener owns that
+  channel — so the caller waited out its entire connect timeout and then reported
+  `bind timed out`, naming the wrong end of the session. The socket is now opened
+  before the task is spawned and the real cause is delivered to the new
+  `SmppClientListener::on_connection_failed` hook, which the Python `connect()`
+  surfaces verbatim (`TCP connect to 127.0.0.1:9 failed: Connection refused`).
+- **`SmppServer::start` is accepting by the time it returns.** It bound its
+  `TcpListener` inside the spawned accept loop, so "started" only meant
+  "scheduled": connecting immediately afterwards was a race. Every test in this
+  crate hid it with a `sleep(100 ms)`; the Python suite did not sleep and failed
+  under free-threaded CPython in CI. `start` now binds first, a bind error goes to
+  the new `SmppServerListener::on_listen_failed` hook (Python's `Server.start()`
+  raises it) instead of `.unwrap()`ing, and an `accept` error stops the loop with
+  a logged reason rather than panicking. The sleeps are gone from the tests.
+
+### Added
+
+- `SmppClientListener::on_connection_failed` and
+  `SmppServerListener::on_listen_failed`. Both are defaulted to a no-op, so
+  existing implementors are unaffected.
+
 ## [1.3.0] - 2026-08-03
 
 ### Added
