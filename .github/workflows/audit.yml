@@ -1,8 +1,11 @@
 # .github/workflows/audit.yml — RustSec advisory + license/source audit.
 #
 # RustSec advisories are time-varying: a new advisory can land against an
-# unchanged dependency, so this runs on a schedule (and whenever the dependency
-# set changes) rather than gating every PR.
+# unchanged dependency, so this runs on a schedule as well as on every change to
+# the dependency set. It also runs on every pull request, so a lockfile bump is
+# audited BEFORE it is merged rather than only after it lands on main. No paths
+# filter on the PR trigger on purpose: this is a required check, and a filtered
+# trigger would never report on a PR that misses the filter, blocking it.
 name: Security audit
 
 on:
@@ -14,6 +17,7 @@ on:
       - "**/Cargo.toml"
       - "Cargo.lock"
       - "deny.toml"
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -24,7 +28,7 @@ jobs:
     name: cargo-deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
