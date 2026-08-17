@@ -1,5 +1,4 @@
 use log::error;
-use num_traits::FromPrimitive;
 
 use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 
@@ -132,8 +131,7 @@ impl unbind_resp {
 
     /// Convert inner command_status into an SmppError enum
     pub fn get_error(&self) -> SmppError {
-        FromPrimitive::from_u32(self.header.command_status)
-            .expect("Can not convert command_status to SmppError")
+        SmppError::from_command_status(self.header.command_status)
     }
 
     /// Encode a unbind_resp based on inner command header

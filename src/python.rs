@@ -589,6 +589,21 @@ pub struct SubmitSmEvent {
     responder: std::sync::Mutex<Option<oneshot::Sender<submit_sm_resp>>>,
 }
 
+impl SubmitSmEvent {
+    /// Take the one-shot responder, at most once.
+    ///
+    /// A poisoned lock still has a perfectly usable `Option` behind it, and
+    /// panicking here would leave the peer's submit_sm unanswered — so recover
+    /// rather than unwrap. Returning `None` (already answered) is what the
+    /// callers turn into a Python error.
+    fn take_responder(&self) -> Option<oneshot::Sender<submit_sm_resp>> {
+        match self.responder.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        }
+    }
+}
+
 #[pymethods]
 impl SubmitSmEvent {
     #[getter]
@@ -649,7 +664,7 @@ impl SubmitSmEvent {
 
     /// Accept the message, returning the given SMSC-assigned message_id.
     fn accept(&self, message_id: String) -> PyResult<()> {
-        match self.responder.lock().unwrap().take() {
+        match self.take_responder() {
             Some(tx) => {
                 let _ = tx.send(self.req.clone().accept(message_id));
                 Ok(())
@@ -661,7 +676,7 @@ impl SubmitSmEvent {
     /// Reject the message with an SMPP command_status (e.g. `smpp34.ESME_RMSGQFUL`).
     #[pyo3(signature = (command_status = CoreSmppError::ESME_RSYSERR as u32))]
     fn reject(&self, command_status: u32) -> PyResult<()> {
-        match self.responder.lock().unwrap().take() {
+        match self.take_responder() {
             Some(tx) => {
                 let _ = tx.send(self.req.clone().reject(map_error(command_status)));
                 Ok(())

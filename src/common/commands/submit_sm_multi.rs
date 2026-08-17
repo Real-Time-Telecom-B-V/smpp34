@@ -2,7 +2,6 @@ use nom::{
     number::complete::{be_u32, be_u8},
     IResult,
 };
-use num_traits::FromPrimitive;
 
 use crate::common::parse_c_octet_string_nom;
 use crate::common::tlv::{decode_tlvs, encode_tlvs, tlvs_encoded_len, Tlv};
@@ -414,8 +413,7 @@ impl submit_sm_multi_resp {
         self.header.command_status
     }
     pub fn get_error(&self) -> SmppError {
-        FromPrimitive::from_u32(self.header.command_status)
-            .expect("Can not convert command_status to SmppError")
+        SmppError::from_command_status(self.header.command_status)
     }
 
     pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<submit_sm_multi_resp, SmppError> {

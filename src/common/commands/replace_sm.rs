@@ -1,7 +1,6 @@
 use crate::common::parse_c_octet_string_nom;
 use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 use nom::bytes::complete::take;
-use num_traits::FromPrimitive;
 
 #[derive(Debug, Clone)]
 pub struct replace_sm {
@@ -185,8 +184,7 @@ impl replace_sm_resp {
         self.header.command_status
     }
     pub fn get_error(&self) -> SmppError {
-        FromPrimitive::from_u32(self.header.command_status)
-            .expect("Can not convert command_status to SmppError")
+        SmppError::from_command_status(self.header.command_status)
     }
 
     pub fn decode(header: CommandHeader, _pdu: &[u8]) -> Result<replace_sm_resp, SmppError> {

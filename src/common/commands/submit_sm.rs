@@ -2,7 +2,6 @@ use crate::common::parse_c_octet_string_nom;
 use crate::common::tlv::{decode_tlvs, encode_tlvs, tlvs_encoded_len, Tlv};
 use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 use nom::bytes::complete::take;
-use num_traits::FromPrimitive;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct submit_sm {
@@ -336,13 +335,12 @@ impl submit_sm_resp {
         self.header.command_status
     }
     pub fn get_error(&self) -> SmppError {
-        FromPrimitive::from_u32(self.header.command_status)
-            .expect("Can not convert command_status to SmppError")
+        SmppError::from_command_status(self.header.command_status)
     }
 
     pub fn encode(self) -> Vec<u8> {
         let mut buffer: Vec<u8> =
-            Vec::with_capacity(self.header.command_length.try_into().unwrap());
+            Vec::with_capacity(usize::try_from(self.header.command_length).unwrap_or(0));
         buffer.append(&mut self.header.encode());
 
         if let Some(message_id) = self.message_id {

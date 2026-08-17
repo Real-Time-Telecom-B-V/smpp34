@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
     },
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 use bytes::BytesMut;
@@ -18,6 +18,7 @@ use tokio::{
     time::{interval, timeout},
 };
 
+use crate::common::be_u32_at;
 use crate::{
     bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp, bind_transmitter,
     bind_transmitter_resp, cancel_sm, common::SmppError, data_sm, data_sm_resp, deliver_sm_resp,
@@ -66,7 +67,7 @@ async fn read_loop(
             HashMap<
                 u32,
                 (
-                    SystemTime,
+                    Instant,
                     Option<
                         tokio::sync::oneshot::Sender<Box<dyn SmppReply + Send + Sync + 'static>>,
                     >,
@@ -93,7 +94,7 @@ async fn read_loop(
                     writer_pending_requests
                         .lock()
                         .await
-                        .insert(our_sequence_number, (SystemTime::now(), frame.oneshot));
+                        .insert(our_sequence_number, (Instant::now(), frame.oneshot));
                 }
                 match writer.write(&frame.pdu).await {
                     Ok(_) => {}
@@ -233,11 +234,7 @@ async fn read_loop(
                     let mut last_pdu_was_unbind = false;
                     let mut writer_dead = false;
                     while buffer.len() - cursor >= 16 {
-                        let pdu_length: u32 = u32::from_be_bytes(
-                            buffer[cursor..cursor + 4]
-                                .try_into()
-                                .expect("Can not read PDU length"),
-                        );
+                        let pdu_length: u32 = be_u32_at(&buffer, cursor);
                         // A length-delimited stream cannot resync from a bogus
                         // length — reject < 16 or absurdly large as fatal.
                         if (pdu_length as usize) < 16 || pdu_length as usize > MAX_PDU_LEN {
@@ -258,11 +255,7 @@ async fn read_loop(
                         // Try read sequence_number in case we need a generic_nack.
                         // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
                         let potential_seq_no = if pdu_length >= 16 {
-                            u32::from_be_bytes(
-                                pdu[12..16]
-                                    .try_into()
-                                    .expect("Can not read sequence_number"),
-                            )
+                            be_u32_at(&pdu, 12)
                         } else {
                             0
                         };
@@ -611,8 +604,7 @@ async fn read_loop(
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                         // Time-out detection
-                                        let lapsed =
-                                            time.elapsed().expect("Unable to elapse").as_millis();
+                                        let lapsed = time.elapsed().as_millis();
                                         if lapsed > response_timer.into() {
                                             error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                             listener
@@ -679,8 +671,7 @@ async fn read_loop(
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                         // Time-out detection
-                                        let lapsed =
-                                            time.elapsed().expect("Unable to elapse").as_millis();
+                                        let lapsed = time.elapsed().as_millis();
                                         if lapsed > response_timer.into() {
                                             error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                             listener
@@ -743,8 +734,7 @@ async fn read_loop(
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                         // Time-out detection
-                                        let lapsed =
-                                            time.elapsed().expect("Unable to elapse").as_millis();
+                                        let lapsed = time.elapsed().as_millis();
                                         if lapsed > response_timer.into() {
                                             error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                             listener
@@ -807,8 +797,7 @@ async fn read_loop(
                                         drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                         // Time-out detection
-                                        let lapsed =
-                                            time.elapsed().expect("Unable to elapse").as_millis();
+                                        let lapsed = time.elapsed().as_millis();
                                         if lapsed > response_timer.into() {
                                             error!("[{} on server {}] Response came in for sequence_number {} after time-out {}ms lapsed", connection_information.client_address, connection_information.server_address, header.sequence_number, lapsed);
                                             listener
@@ -912,7 +901,7 @@ async fn read_loop(
                     let mut timed_out_sequences = Vec::new();
 
                     pending_requests.retain(|sequence_number, (time, _)| {
-                        let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
+                        let lapsed = time.elapsed().as_millis();
                         if lapsed > response_timer.into() {
                             timed_out_sequences.push(*sequence_number);
                             error!("[{} on server {}] Response for sequence_number {} did not come in after {}ms lapsed", connection_information.client_address, connection_information.server_address, sequence_number, lapsed);
@@ -1084,10 +1073,12 @@ impl OPEN {
             }
         } else {
             error!("Connection from {} on server {} with system_id {} was rejected with error {:?}, closing TCP connection", connection_information.client_address, connection_information.server_address, bind_transceiver.system_id, bind_transceiver_resp.get_error());
-            stream
+            if let Err(e) = stream
                 .write_all(&bind_transceiver_resp.clone().encode())
                 .await
-                .expect("Unable to write to TCP socket");
+            {
+                error!("Connection from {} on server {}: could not send the bind_transceiver rejection ({}), the peer is gone", connection_information.client_address, connection_information.server_address, e);
+            }
             Err(bind_transceiver_resp.get_error())
         }
     }
