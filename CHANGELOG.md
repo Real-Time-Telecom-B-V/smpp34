@@ -8,8 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-17
+
+Nothing in this release changes an existing signature or documented guarantee a
+caller could depend on; it removes ways the library could take your process down.
+`src/` went from **50** `.unwrap()`/`.expect()` calls outside `#[cfg(test)]` to
+**zero**, and several of those were reachable straight from the wire.
+
+### Added
+
+- `SmppClientListener::on_connection_failed` and
+  `SmppServerListener::on_listen_failed` — the session could not be established,
+  or the listening socket could not be bound. Both are defaulted to a no-op, so
+  existing implementors are unaffected.
+- `SmppError::from_command_status`, the non-panicking wire-status mapping.
+
 ### Fixed
 
+- **A failed connect is reported instead of panicking a tokio worker.**
+  `SmppClient::start` opened its socket inside the spawned session task and
+  `.unwrap()`ed the result, so an ordinary refused connect panicked a runtime
+  worker. The panic did not even settle the pending bind — the listener owns that
+  channel — so the caller waited out its entire connect timeout and then reported
+  `bind timed out`, naming the wrong end of the session. The socket is now opened
+  before the task is spawned and the real cause is delivered to
+  `on_connection_failed`, which the Python `connect()` surfaces verbatim
+  (`TCP connect to 127.0.0.1:9 failed: Connection refused`).
+- **`SmppServer::start` is accepting by the time it returns.** It bound its
+  `TcpListener` inside the spawned accept loop, so "started" only meant
+  "scheduled": connecting immediately afterwards was a race. Every test in this
+  crate hid it with a `sleep(100 ms)`; the Python suite did not sleep and failed
+  under free-threaded CPython in CI. `start` now binds first, a bind error goes to
+  `on_listen_failed` (Python's `Server.start()` raises it) instead of being
+  `.unwrap()`ed, and an `accept` error stops the loop with a logged reason rather
+  than panicking. The sleeps are gone from the tests.
 - **A `command_status` the peer is entitled to send no longer panics the session.**
   `get_error()` was `FromPrimitive::from_u32(status).expect(..)` on all 14 response
   types, so any status outside our enum aborted the task that read it. SMPP 3.4
@@ -40,40 +72,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
   capacity is a hint, so an unrepresentable length falls back to 0.
 - The Python `submit_sm` responder tolerates a poisoned mutex instead of
   unwrapping it, which would have left the peer's `submit_sm` unanswered.
-
-There are now **zero** `.unwrap()` / `.expect()` calls in non-test `src/`, down
-from 50. Clippy also loses its three `unwrap on session_state after is_ok`
-warnings, rewritten as `if let Ok(state)`.
-
-### Added
-
-- `SmppError::from_command_status`, the non-panicking wire-status mapping.
-
-### Fixed
-
-- **A failed connect is reported instead of panicking a tokio worker.**
-  `SmppClient::start` opened its socket inside the spawned session task and
-  `.unwrap()`ed the result, so an ordinary refused connect panicked a runtime
-  worker. The panic did not even settle the pending bind — the listener owns that
-  channel — so the caller waited out its entire connect timeout and then reported
-  `bind timed out`, naming the wrong end of the session. The socket is now opened
-  before the task is spawned and the real cause is delivered to the new
-  `SmppClientListener::on_connection_failed` hook, which the Python `connect()`
-  surfaces verbatim (`TCP connect to 127.0.0.1:9 failed: Connection refused`).
-- **`SmppServer::start` is accepting by the time it returns.** It bound its
-  `TcpListener` inside the spawned accept loop, so "started" only meant
-  "scheduled": connecting immediately afterwards was a race. Every test in this
-  crate hid it with a `sleep(100 ms)`; the Python suite did not sleep and failed
-  under free-threaded CPython in CI. `start` now binds first, a bind error goes to
-  the new `SmppServerListener::on_listen_failed` hook (Python's `Server.start()`
-  raises it) instead of `.unwrap()`ing, and an `accept` error stops the loop with
-  a logged reason rather than panicking. The sleeps are gone from the tests.
-
-### Added
-
-- `SmppClientListener::on_connection_failed` and
-  `SmppServerListener::on_listen_failed`. Both are defaulted to a no-op, so
-  existing implementors are unaffected.
 
 ## [1.3.0] - 2026-08-03
 
@@ -263,7 +261,8 @@ privately; this is the initial open-source cut under the MIT license.
 - Removed the unused `tokio-rustls` dependency (the TLS path uses
   `tokio-native-tls`); moved `env_logger` / `test-log` to dev-dependencies.
 
-[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.3.0...main
+[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.4.0...main
+[1.4.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.3.0
 [1.2.1]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.2.1
 [1.2.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.2.0
