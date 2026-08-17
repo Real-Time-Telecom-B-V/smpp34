@@ -1008,6 +1008,14 @@ pub trait SmppClientListener {
     /// Notification sent when the SMSC has become unavailable due to a bind being closed or transport error
     /// It is up to the user of this listener to drop the SMSC received on the on_smsc_bound notificiation, any attempt to write to the SMSC after will result in a panic as the MSPC channel is closed
     async fn on_smsc_unbound(&self, _session_id: &String) {}
+
+    /// Notification sent when the session could never be established: the TCP
+    /// connect, the TLS handshake or the socket setup failed. No bind follows and
+    /// no session task is started, so this is the only notification an attempt
+    /// like that produces. `error` names the step and the address that failed.
+    ///
+    /// Defaulted to a no-op so existing implementors are unaffected.
+    async fn on_connection_failed(&self, _error: &str) {}
 }
 
 struct StreamWrapper {
@@ -1019,8 +1027,10 @@ struct StreamWrapper {
 
 impl StreamWrapper {
     pub fn new_tcp(stream: TcpStream) -> io::Result<Self> {
-        let server_address = stream.peer_addr().unwrap();
-        let client_address = stream.local_addr().unwrap();
+        // These are the whole reason the constructor is fallible: propagate them
+        // instead of unwrapping, or the `io::Result` is decorative.
+        let server_address = stream.peer_addr()?;
+        let client_address = stream.local_addr()?;
 
         let (read_half, write_half) = split(stream);
         Ok(StreamWrapper {
@@ -1032,8 +1042,8 @@ impl StreamWrapper {
     }
 
     pub fn new_tls(stream: TlsStream<TcpStream>) -> io::Result<Self> {
-        let server_address = stream.get_ref().get_ref().get_ref().peer_addr().unwrap();
-        let client_address = stream.get_ref().get_ref().get_ref().local_addr().unwrap();
+        let server_address = stream.get_ref().get_ref().get_ref().peer_addr()?;
+        let client_address = stream.get_ref().get_ref().get_ref().local_addr()?;
 
         let (read_half, write_half) = split(stream);
         Ok(StreamWrapper {
@@ -1069,6 +1079,45 @@ impl StreamWrapper {
 
     fn peer_addr(&self) -> SocketAddr {
         self.server_address
+    }
+}
+
+/// Open the transport for a session, plain or TLS.
+///
+/// Every step names what failed and where, because this is the string the
+/// caller sees through `on_connection_failed` — "bind timed out" for a refused
+/// connect sent people looking at the wrong end of the session.
+async fn establish_stream(
+    server_address: &str,
+    server_port: u16,
+    tls: bool,
+) -> Result<StreamWrapper, String> {
+    let address = format!("{}:{}", server_address, server_port);
+
+    if tls {
+        let connector = native_tls::TlsConnector::builder()
+            .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+            .build()
+            .map_err(|e| format!("TLS connector setup failed: {e}"))?;
+        let connector = TlsConnector::from(connector);
+
+        let stream = TcpStream::connect(&address)
+            .await
+            .map_err(|e| format!("TCP connect to {address} failed: {e}"))?;
+        let stream = connector
+            .connect(server_address, stream)
+            .await
+            .map_err(|e| format!("TLS handshake with {address} failed: {e}"))?;
+
+        StreamWrapper::new_tls(stream)
+            .map_err(|e| format!("socket setup for {address} failed: {e}"))
+    } else {
+        let stream = TcpStream::connect(&address)
+            .await
+            .map_err(|e| format!("TCP connect to {address} failed: {e}"))?;
+
+        StreamWrapper::new_tcp(stream)
+            .map_err(|e| format!("socket setup for {address} failed: {e}"))
     }
 }
 
@@ -1182,28 +1231,27 @@ impl SmppClient {
         let address_range = self.address_range.clone();
         let tls = self.tls;
 
-        self.handle = Some(tokio::spawn(async move {
-            let mut stream = if tls {
-                let connector = TlsConnector::from(
-                    native_tls::TlsConnector::builder()
-                        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-                        .build()
-                        .unwrap(),
-                );
-
-                let domain = server_socket_address.clone();
-                let address = format!("{}:{}", &domain, &server_socker_port);
-                let stream = TcpStream::connect(address).await.unwrap();
-                let stream = connector.connect(&domain, stream).await.unwrap();
-
-                StreamWrapper::new_tls(stream).unwrap()
-            } else {
-                let address = format!("{}:{}", &server_socket_address, &server_socker_port);
-                let stream = TcpStream::connect(address).await.unwrap();
-
-                StreamWrapper::new_tcp(stream).unwrap()
+        // Connect BEFORE spawning the session task. Doing it inside the task left
+        // the failure with nowhere to go, so it was `.unwrap()`ed: that panicked a
+        // tokio worker, and because the listener still owns the bind channel the
+        // panic did not even close it, so the caller waited out its full bind
+        // timeout and blamed the bind for a refused connect. Connecting here lets
+        // the real cause reach `on_connection_failed`, and makes `start()`
+        // returning mean the socket is up.
+        let mut stream =
+            match establish_stream(&server_socket_address, server_socker_port, tls).await {
+                Ok(stream) => stream,
+                Err(error) => {
+                    error!(
+                        "smpp client could not establish a session with server {}:{}: {}",
+                        server_socket_address, server_socker_port, error
+                    );
+                    listener.on_connection_failed(&error).await;
+                    return;
+                }
             };
 
+        self.handle = Some(tokio::spawn(async move {
             // TODO set connection timeout!
             info!(
                 "smpp client connected to server {}, sending bind PDU",

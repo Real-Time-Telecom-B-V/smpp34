@@ -683,6 +683,14 @@ pub trait SmppServerListener {
     /// Notification sent when the ESME has become unavailable due to a bind being closed or transport error
     /// It is up to the user of this listener to drop the ESME received on the on_esme_bound notificiation, any attempt to write to the ESME after will result in a panic as the MSPC channel is closed
     async fn on_esme_unbound(&self, _session_id: &String) {}
+
+    /// Notification sent when the server never came up, because the listening
+    /// socket could not be bound (a port already in use, an address the host does
+    /// not own, a privileged port). No connection will ever be accepted, so this
+    /// is terminal for the server. `error` names the address that failed.
+    ///
+    /// Defaulted to a no-op so existing implementors are unaffected.
+    async fn on_listen_failed(&self, _error: &str) {}
 }
 
 impl SmppServer {
@@ -730,9 +738,27 @@ impl SmppServer {
         }
 
         info!("Starting smpp server on {}:{}", self.address, self.port);
-        self.alive.store(true, Ordering::SeqCst);
 
         let server_socket_address = SocketAddr::new(self.address, self.port); // Will be moved out
+
+        // Bind BEFORE spawning the accept loop, so `start()` returning means the
+        // socket is accepting. Binding inside the task made "started" merely mean
+        // "scheduled": every test in this crate had to sleep 100ms afterwards, and
+        // the Python suite, which did not, raced and failed under free-threaded
+        // CPython. It also left the bind error with nowhere to go but `.unwrap()`,
+        // panicking a tokio worker on something as ordinary as a taken port.
+        let listener = match TcpListener::bind(server_socket_address).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                let error = format!("TCP bind of {server_socket_address} failed: {error}");
+                error!("smpp server could not start: {}", error);
+                self.handler.on_listen_failed(&error).await;
+                return;
+            }
+        };
+
+        self.alive.store(true, Ordering::SeqCst);
+
         let alive = self.alive.clone();
         let handler = self.handler.clone();
         let session_init_timer = self.session_init_timer;
@@ -742,11 +768,23 @@ impl SmppServer {
         let buffer_size: usize = self.buffer_size;
 
         self.handle = Some(tokio::spawn(async move {
-            let listener = TcpListener::bind(server_socket_address).await.unwrap();
-
             while alive.load(Ordering::SeqCst) {
                 loop {
-                    let (mut stream, client_socket_address) = listener.accept().await.unwrap();
+                    // An accept error is not a reason to panic the runtime. Log it
+                    // with the listener's address and stop accepting: once the
+                    // listening socket is broken it will not recover, and silently
+                    // spinning on it would burn a core.
+                    let (mut stream, client_socket_address) = match listener.accept().await {
+                        Ok(accepted) => accepted,
+                        Err(error) => {
+                            error!(
+                                "smpp server stopped accepting on {}: {}",
+                                server_socket_address, error
+                            );
+                            alive.store(false, Ordering::SeqCst);
+                            return;
+                        }
+                    };
                     if alive.load(Ordering::SeqCst) {
                         let handler = handler.clone();
                         let session_init_timer_duration =

@@ -751,17 +751,48 @@ impl<'py> IntoPyObject<'py> for ServerEvent {
 }
 
 // ── Forwarding listeners (the entire Rust<->Python bridge) ───────────────────
+/// How a session-establishment attempt turned out: the bound SMSC, or the reason
+/// the session never came up. A pending `connect()` is settled with exactly one
+/// of these, so a refused connect is reported as a refused connect.
+type BindOutcome = Result<Arc<SMSC>, String>;
+
+/// Write end of that one-shot, held by the listener until it settles the attempt.
+type BindSlot = std::sync::Mutex<Option<oneshot::Sender<BindOutcome>>>;
+
+/// Read end, parked on the `Client` until `connect()` takes it.
+type BindReceiverSlot = Arc<TokioMutex<Option<oneshot::Receiver<BindOutcome>>>>;
+
 struct ClientForwarder {
-    bind_tx: std::sync::Mutex<Option<oneshot::Sender<Arc<SMSC>>>>,
+    // Carries the outcome, not just the success: a session that never connected
+    // has to reach `connect()` as the reason it failed, or the caller is left
+    // waiting for a bind that was never going to happen.
+    bind_tx: BindSlot,
     events_tx: mpsc::Sender<ClientEvent>,
+}
+
+impl ClientForwarder {
+    /// Settle the pending `connect()` exactly once. A poisoned lock still has a
+    /// usable `Option` behind it, and dropping the outcome on the floor would
+    /// hang the caller, so recover rather than unwrap.
+    fn settle_bind(&self, outcome: BindOutcome) {
+        let taken = match self.bind_tx.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(tx) = taken {
+            let _ = tx.send(outcome);
+        }
+    }
 }
 
 #[async_trait]
 impl SmppClientListener for ClientForwarder {
     async fn on_smsc_bound(&self, smsc: SMSC, _session_id: &String) {
-        if let Some(tx) = self.bind_tx.lock().unwrap().take() {
-            let _ = tx.send(Arc::new(smsc));
-        }
+        self.settle_bind(Ok(Arc::new(smsc)));
+    }
+
+    async fn on_connection_failed(&self, error: &str) {
+        self.settle_bind(Err(error.to_string()));
     }
 
     async fn on_deliver_sm(
@@ -790,6 +821,19 @@ impl SmppClientListener for ClientForwarder {
 struct ServerForwarder {
     system_id: String,
     events_tx: mpsc::Sender<ServerEvent>,
+    // Why the listening socket never came up. `SmppServer::start()` reports this
+    // through the listener rather than by returning, so stash it here for
+    // `Server.start()` to raise instead of returning as if the server were up.
+    listen_error: std::sync::Mutex<Option<String>>,
+}
+
+impl ServerForwarder {
+    fn take_listen_error(&self) -> Option<String> {
+        match self.listen_error.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        }
+    }
 }
 
 #[async_trait]
@@ -852,6 +896,13 @@ impl SmppServerListener for ServerForwarder {
         let _ = self
             .events_tx
             .try_send(ServerEvent::Unbound(session_id.clone()));
+    }
+
+    async fn on_listen_failed(&self, error: &str) {
+        match self.listen_error.lock() {
+            Ok(mut guard) => *guard = Some(error.to_string()),
+            Err(poisoned) => *poisoned.into_inner() = Some(error.to_string()),
+        }
     }
 }
 
@@ -993,7 +1044,7 @@ impl Smsc {
 #[pyclass(module = "smpp34._smpp34")]
 pub struct Client {
     client: Arc<TokioMutex<SmppClient>>,
-    bind_rx: Arc<TokioMutex<Option<oneshot::Receiver<Arc<SMSC>>>>>,
+    bind_rx: BindReceiverSlot,
     events_rx: Arc<TokioMutex<mpsc::Receiver<ClientEvent>>>,
     connect_timeout_ms: u64,
 }
@@ -1088,7 +1139,11 @@ impl Client {
             }
             let smsc = match tokio::time::timeout(Duration::from_millis(timeout_ms), bind_rx).await
             {
-                Ok(Ok(smsc)) => smsc,
+                Ok(Ok(Ok(smsc))) => smsc,
+                // The session never came up. Report what actually failed — a
+                // refused connect used to surface as "bind timed out", which named
+                // the wrong end of the session and cost the full timeout to say.
+                Ok(Ok(Err(reason))) => return Err(SmppError::new_err(reason)),
                 Ok(Err(_)) => {
                     return Err(SmppError::new_err("session closed before bind completed"))
                 }
@@ -1128,6 +1183,7 @@ impl Client {
 pub struct Server {
     server: Arc<TokioMutex<SmppServer>>,
     events_rx: Arc<TokioMutex<mpsc::Receiver<ServerEvent>>>,
+    forwarder: Arc<ServerForwarder>,
 }
 
 #[pymethods]
@@ -1148,20 +1204,30 @@ impl Server {
         let forwarder = Arc::new(ServerForwarder {
             system_id,
             events_tx,
+            listen_error: std::sync::Mutex::new(None),
         });
-        let server = SmppServer::new(ip, port, forwarder);
+        let server = SmppServer::new(ip, port, forwarder.clone());
         Ok(Self {
             server: Arc::new(TokioMutex::new(server)),
             events_rx: Arc::new(TokioMutex::new(events_rx)),
+            forwarder,
         })
     }
 
     /// Bind the listening socket and start accepting connections.
+    ///
+    /// Returning means the socket is accepting, so a client may connect on the
+    /// very next line. A bind failure raises `SmppError` rather than returning
+    /// quietly and leaving the first connect to fail with something unrelated.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let server = self.server.clone();
+        let forwarder = self.forwarder.clone();
         future_into_py(py, async move {
             let mut guard = server.lock().await;
             guard.start().await;
+            if let Some(reason) = forwarder.take_listen_error() {
+                return Err(SmppError::new_err(reason));
+            }
             Ok(())
         })
     }

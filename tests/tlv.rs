@@ -142,7 +142,6 @@ async fn bound_session() -> Session {
         }),
     );
     server.start().await;
-    tokio::time::sleep(Duration::from_millis(100)).await; // let the accept loop come up
 
     let (bound_tx, bound_rx) = oneshot::channel();
     let (deliver_tx, deliver_tlvs) = mpsc::channel(16);

@@ -79,7 +79,6 @@ async fn pipelined_submit_sm_all_received() {
     });
     let mut server = SmppServer::new(IpAddr::from([127, 0, 0, 1]), port, counter.clone());
     server.start().await;
-    tokio::time::sleep(Duration::from_millis(100)).await; // let the accept loop come up
 
     // Bind one ESME session.
     let (tx, rx) = oneshot::channel();
