@@ -8,6 +8,8 @@ use chrono::Utc;
 use downcast_rs::impl_downcast;
 use downcast_rs::DowncastSync;
 use log::error;
+use log::warn;
+use num_traits::FromPrimitive;
 // Re-exports
 pub use commands::alert_notification::*;
 pub use commands::bind_receiver::*;
@@ -270,6 +272,53 @@ pub enum SmppError {
     ESME_RUNKNOWNERR = 0x000000FF,      // Unknown Error
 }
 
+/// Read a big-endian `u32` at `offset`, or 0 if the slice is too short.
+///
+/// Used for the two header fields that are read before the header itself has
+/// been validated: `command_length` while framing, and `sequence_number` so a
+/// malformed PDU can still be nacked against the right sequence. Every call site
+/// length-checks first, so the fallback is unreachable in practice — but
+/// expressing it as a fallback rather than an `expect` means a malformed read can
+/// never panic a session task, and 0 is the right answer either way: SMPP 3.4
+/// advises sequence_number 0 when it cannot be determined, and a length of 0
+/// fails the `< 16` framing check that already closes the connection.
+pub(crate) fn be_u32_at(bytes: &[u8], offset: usize) -> u32 {
+    bytes
+        .get(offset..offset.saturating_add(4))
+        .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
+        .map(u32::from_be_bytes)
+        .unwrap_or(0)
+}
+
+impl SmppError {
+    /// Map a `command_status` received off the wire onto its variant.
+    ///
+    /// A status outside this enum is a **conformant** thing for a peer to send:
+    /// SMPP 3.4 §5.1.3 reserves `0x00000005`, `0x00000009`, `0x00000010`,
+    /// `0x00000012`, `0x0000003F`, `0x000000C5`-`0x000000FD` and
+    /// `0x00000100`-`0x000003FF`, and leaves `0x00000400`-`0x000004FF` explicitly
+    /// vendor-specific. Real SMSCs do use that range. Treating one as
+    /// unrepresentable used to panic the session task on a value the peer was
+    /// entitled to send, so an unrecognised status now maps to
+    /// `ESME_RUNKNOWNERR` and is logged with its raw value. The exact number is
+    /// never lost — every response PDU still exposes it through
+    /// `command_status()`.
+    pub fn from_command_status(status: u32) -> Self {
+        match FromPrimitive::from_u32(status) {
+            Some(error) => error,
+            None => {
+                warn!(
+                    "command_status 0x{:08X} is not a known SMPP 3.4 status \
+                     (reserved or vendor-specific per §5.1.3); reporting it as \
+                     ESME_RUNKNOWNERR, the raw value is on the PDU",
+                    status
+                );
+                SmppError::ESME_RUNKNOWNERR
+            }
+        }
+    }
+}
+
 fn encode_bind_request(
     header: CommandHeader,
     system_id: String,
@@ -409,4 +458,75 @@ pub(crate) struct WriteFrame {
 
     pub(crate) oneshot:
         Option<tokio::sync::oneshot::Sender<Box<dyn SmppReply + Send + Sync + 'static>>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `be_u32_at` is the replacement for four `.expect("Can not read ...")` sites
+    // that read header fields off a buffer before the header had been validated.
+    // Every caller length-checks first, so the out-of-range arms are unreachable
+    // in practice — but they are the reason the function exists, so they are the
+    // part worth pinning.
+
+    #[test]
+    fn be_u32_at_reads_big_endian() {
+        let bytes = [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, 0x2A];
+        assert_eq!(be_u32_at(&bytes, 0), 0xDEAD_BEEF);
+        assert_eq!(be_u32_at(&bytes, 4), 42);
+        assert_eq!(be_u32_at(&bytes, 1), 0xADBE_EF00);
+    }
+
+    #[test]
+    fn be_u32_at_yields_zero_rather_than_panicking_past_the_end() {
+        // A short or truncated buffer used to reach `.expect(..)` and take the
+        // session task down. Zero is the right fallback at both call sites: SMPP
+        // 3.4 advises sequence_number 0 when it cannot be determined, and a
+        // command_length of 0 fails the `< 16` framing check that already closes
+        // the connection.
+        assert_eq!(be_u32_at(&[], 0), 0);
+        assert_eq!(be_u32_at(&[0x01, 0x02, 0x03], 0), 0, "three bytes is short");
+        assert_eq!(
+            be_u32_at(&[0x01, 0x02, 0x03, 0x04], 1),
+            0,
+            "runs off the end"
+        );
+        assert_eq!(
+            be_u32_at(&[0x01, 0x02, 0x03, 0x04], 4),
+            0,
+            "starts at the end"
+        );
+        assert_eq!(
+            be_u32_at(&[0x01, 0x02, 0x03, 0x04], 99),
+            0,
+            "far past the end"
+        );
+    }
+
+    #[test]
+    fn be_u32_at_does_not_overflow_on_a_huge_offset() {
+        // `offset + 4` on a near-`usize::MAX` offset would wrap and could index a
+        // valid range; the saturating add makes that impossible.
+        assert_eq!(be_u32_at(&[0x01, 0x02, 0x03, 0x04], usize::MAX), 0);
+        assert_eq!(be_u32_at(&[0x01, 0x02, 0x03, 0x04], usize::MAX - 2), 0);
+    }
+
+    #[test]
+    fn from_command_status_maps_unknown_values_to_unknown_error() {
+        assert_eq!(
+            SmppError::from_command_status(0x0000_0450),
+            SmppError::ESME_RUNKNOWNERR
+        );
+        assert_eq!(
+            SmppError::from_command_status(0xFFFF_FFFF),
+            SmppError::ESME_RUNKNOWNERR
+        );
+        // and keeps the ones it knows
+        assert_eq!(SmppError::from_command_status(0), SmppError::ESME_ROK);
+        assert_eq!(
+            SmppError::from_command_status(0x0000_0004),
+            SmppError::ESME_RINVBNDSTS
+        );
+    }
 }

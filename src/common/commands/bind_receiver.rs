@@ -1,5 +1,3 @@
-use num_traits::FromPrimitive;
-
 use crate::common::tlv::{decode_tlvs, TlvList};
 use crate::{
     common::{
@@ -152,8 +150,7 @@ impl bind_receiver_resp {
         self.header.command_status
     }
     pub fn get_error(&self) -> SmppError {
-        FromPrimitive::from_u32(self.header.command_status)
-            .expect("Can not convert command_status to SmppError")
+        SmppError::from_command_status(self.header.command_status)
     }
 
     pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<bind_receiver_resp, SmppError> {

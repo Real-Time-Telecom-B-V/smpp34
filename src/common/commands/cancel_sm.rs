@@ -1,5 +1,4 @@
 use nom::{number::complete::be_u8, IResult};
-use num_traits::FromPrimitive;
 
 use crate::{common::parse_c_octet_string_nom, CommandHeader, CommandId, SmppError, SmppReply};
 
@@ -176,8 +175,7 @@ impl cancel_sm_resp {
         self.header.command_status
     }
     pub fn get_error(&self) -> SmppError {
-        FromPrimitive::from_u32(self.header.command_status)
-            .expect("Can not convert command_status to SmppError")
+        SmppError::from_command_status(self.header.command_status)
     }
 
     pub fn decode(header: CommandHeader, pdu: &[u8]) -> Result<cancel_sm_resp, SmppError> {

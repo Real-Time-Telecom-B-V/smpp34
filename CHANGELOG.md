@@ -10,6 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ### Fixed
 
+- **A `command_status` the peer is entitled to send no longer panics the session.**
+  `get_error()` was `FromPrimitive::from_u32(status).expect(..)` on all 14 response
+  types, so any status outside our enum aborted the task that read it. SMPP 3.4
+  §5.1.3 leaves `0x00000400`-`0x000004FF` explicitly vendor-specific and reserves
+  several other ranges, and real SMSCs use them — and `get_error()` is called
+  directly on what the peer sent (`generic_nack.get_error()`,
+  `bind_*_resp.get_error()`). Unknown statuses now map to `ESME_RUNKNOWNERR` and
+  are logged with their raw value, which stays readable via `command_status()`.
+- **Response timers use a monotonic clock.** The pending-request maps keyed on
+  `SystemTime` and called `.expect("Unable to elapse")` on every check, so a
+  wall-clock step backwards (NTP, suspend/resume) either skewed a timeout or
+  panicked outright. They now use `Instant`, which is monotonic and whose
+  `elapsed()` cannot fail — removing 20 panic sites and the underlying bug.
+- **`stop()` on something that never started is a no-op.** It was
+  `self.handle.take().expect("Called stop on non-running thread")`, reachable on
+  exactly the instance a caller is most likely to clean up now that a failed
+  connect or bind returns instead of panicking. `Drop` goes through the same path.
+- **A peer that leaves mid-write no longer panics us.** Sending a bind rejection
+  or a `generic_nack` to a disconnected peer used to be
+  `.expect("Can not write to stream")`. The failure is now logged with the
+  connection's addresses; the session was being torn down regardless.
+- **Framing reads cannot panic.** The four `.expect("Can not read PDU length")` /
+  `.expect("Can not read sequence_number")` sites read header fields before the
+  header was validated. They go through `be_u32_at`, which yields 0 out of range —
+  the value SMPP 3.4 advises for an undeterminable sequence_number, and a length
+  that fails the existing `< 16` framing check.
+- `Vec::with_capacity` on a `command_length` no longer unwraps a `try_into`;
+  capacity is a hint, so an unrepresentable length falls back to 0.
+- The Python `submit_sm` responder tolerates a poisoned mutex instead of
+  unwrapping it, which would have left the peer's `submit_sm` unanswered.
+
+There are now **zero** `.unwrap()` / `.expect()` calls in non-test `src/`, down
+from 50. Clippy also loses its three `unwrap on session_state after is_ok`
+warnings, rewritten as `if let Ok(state)`.
+
+### Added
+
+- `SmppError::from_command_status`, the non-panicking wire-status mapping.
+
+### Fixed
+
 - **A failed connect is reported instead of panicking a tokio worker.**
   `SmppClient::start` opened its socket inside the spawned session task and
   `.unwrap()`ed the result, so an ordinary refused connect panicked a runtime

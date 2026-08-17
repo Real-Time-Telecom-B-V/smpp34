@@ -6,12 +6,12 @@ use std::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
     },
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use log::{error, info};
+use log::{debug, error, info};
 use tokio::{
     io::{self, split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
@@ -26,6 +26,7 @@ use tokio::{
 use tokio_native_tls::{native_tls, TlsConnector, TlsStream};
 use uuid::Uuid;
 
+use crate::common::be_u32_at;
 use crate::{
     alert_notification, bind_receiver, bind_transceiver, bind_transmitter, cancel_sm,
     cancel_sm_resp, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, enquire_link, generic_nack,
@@ -1296,11 +1297,16 @@ impl SmppClient {
                 .encode(),
             };
 
-            // Send bind request
-            stream
-                .write(&bind_pdu)
-                .await
-                .expect("Unable to write to TCP stream");
+            // Send bind request. A write failure here means the peer accepted the
+            // connection and then went away, which is ordinary; report it the same
+            // way a failed connect is reported rather than panicking the task.
+            if let Err(error) = stream.write(&bind_pdu).await {
+                let error =
+                    format!("writing the bind PDU to {server_socket_address} failed: {error}");
+                error!("smpp client could not bind: {}", error);
+                listener.on_connection_failed(&error).await;
+                return;
+            }
 
             info!("Bind PDU sent, waiting for response");
             let session_init_timer_duration =
@@ -1316,11 +1322,7 @@ impl SmppClient {
                     // Try read sequence_number in case we need a generic_nack.
                     // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
                     let potential_seq_no = if pdu_length >= 16 {
-                        u32::from_be_bytes(
-                            pdu[12..16]
-                                .try_into()
-                                .expect("Can not read sequence_number"),
-                        )
+                        be_u32_at(&pdu, 12)
                     } else {
                         0
                     };
@@ -1352,7 +1354,7 @@ impl SmppClient {
                                         HashMap<
                                             u32,
                                             (
-                                                SystemTime,
+                                                Instant,
                                                 Option<
                                                     tokio::sync::oneshot::Sender<
                                                         Box<dyn SmppReply + Send + Sync + 'static>,
@@ -1389,7 +1391,7 @@ impl SmppClient {
                                             {
                                                 writer_pending_requests.lock().await.insert(
                                                     our_sequence_number,
-                                                    (SystemTime::now(), frame.oneshot),
+                                                    (Instant::now(), frame.oneshot),
                                                 );
                                             }
                                             match writer.write(&frame.pdu).await {
@@ -1518,11 +1520,8 @@ impl SmppClient {
                                                 let mut last_pdu_was_unbind = false;
                                                 let mut writer_dead = false;
                                                 while buffer.len() - cursor >= 16 {
-                                                    let pdu_length: u32 = u32::from_be_bytes(
-                                                        buffer[cursor..cursor + 4]
-                                                            .try_into()
-                                                            .expect("Can not read PDU length"),
-                                                    );
+                                                    let pdu_length: u32 =
+                                                        be_u32_at(&buffer, cursor);
                                                     // Reject a bogus length — a length-delimited
                                                     // stream cannot resync from one.
                                                     if (pdu_length as usize) < 16
@@ -1543,11 +1542,7 @@ impl SmppClient {
                                                     // Try read sequence_number in case we need a generic_nack.
                                                     // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
                                                     let potential_seq_no = if pdu_length >= 16 {
-                                                        u32::from_be_bytes(
-                                                            pdu[12..16].try_into().expect(
-                                                                "Can not read sequence_number",
-                                                            ),
-                                                        )
+                                                        be_u32_at(&pdu, 12)
                                                     } else {
                                                         0
                                                     };
@@ -1647,10 +1642,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -1709,10 +1702,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -1770,10 +1761,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -1829,10 +1818,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -1888,10 +1875,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -1947,10 +1932,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -2074,10 +2057,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -2128,10 +2109,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -2188,10 +2167,8 @@ impl SmppClient {
                                                                     drop(guard); // Explicitly drop the mutex guard so writes are not blocked
 
                                                                     // Time-out detection
-                                                                    let lapsed = time
-                                                                        .elapsed()
-                                                                        .expect("Unable to elapse")
-                                                                        .as_millis();
+                                                                    let lapsed =
+                                                                        time.elapsed().as_millis();
                                                                     if lapsed
                                                                         > response_timer.into()
                                                                     {
@@ -2303,7 +2280,7 @@ impl SmppClient {
                                                 let mut timed_out_sequences = Vec::new();
 
                                                 guard.retain(|sequence_number, (time, _)| {
-                                                    let lapsed = time.elapsed().expect("Unable to elapse").as_millis();
+                                                    let lapsed = time.elapsed().as_millis();
                                                     if lapsed > response_timer.into() {
                                                         timed_out_sequences.push(*sequence_number);
                                                         error!("[{} on server {}] Response for sequence_number {} did not come in after {}ms lapsed", connection_information.client_address, connection_information.server_address, sequence_number, lapsed);
@@ -2384,10 +2361,13 @@ impl SmppClient {
         // We except the user of this code to send unbind before stopping the client
         info!("Stopping smpp client");
         self.alive.store(false, Ordering::SeqCst);
-        self.handle
-            .take()
-            .expect("Called stop on non-running thread")
-            .abort();
+        match self.handle.take() {
+            Some(handle) => handle.abort(),
+            // Reachable whenever start() returned without spawning, i.e. the
+            // session could not be established. Also hit by Drop after an
+            // explicit stop(). Either way there is nothing to abort.
+            None => debug!("stop() called on an smpp client that is not running"),
+        }
     }
 }
 

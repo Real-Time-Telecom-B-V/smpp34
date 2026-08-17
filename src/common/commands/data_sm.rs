@@ -2,7 +2,6 @@ use crate::common::parse_c_octet_string_nom;
 use crate::common::tlv::{decode_tlvs, encode_tlvs, tlvs_encoded_len, Tlv};
 use crate::{CommandHeader, CommandId, SmppError, SmppReply};
 use nom::bytes::complete::take;
-use num_traits::FromPrimitive;
 
 #[derive(Debug, Clone)]
 pub struct data_sm {
@@ -245,8 +244,7 @@ impl data_sm_resp {
         self.header.command_status
     }
     pub fn get_error(&self) -> SmppError {
-        FromPrimitive::from_u32(self.header.command_status)
-            .expect("Can not convert command_status to SmppError")
+        SmppError::from_command_status(self.header.command_status)
     }
 
     /// Append optional parameters (TLVs), consuming and returning the response

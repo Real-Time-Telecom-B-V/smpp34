@@ -179,3 +179,54 @@ async fn a_bind_conflict_reports_its_real_cause() {
         "a server that never bound must not report itself alive"
     );
 }
+
+// ── stop() after a failed start ─────────────────────────────────────────────
+//
+// `start()` returning without spawning is a state that only exists because a
+// failed connect/bind no longer panics, so `stop()` had never had to cope with
+// it — and `self.handle.take().expect("Called stop on non-running thread")`
+// would have panicked on exactly the instance a caller is most likely to clean
+// up. `Drop` calls `stop()` too, so this also covers letting one go out of scope.
+
+#[tokio::test]
+async fn stopping_a_client_that_never_connected_is_a_no_op() {
+    let port = closed_port();
+    let (tx, _rx) = mpsc::channel(4);
+    let mut client = client_to(port, Arc::new(FailureRecorder { failures: tx }));
+
+    client.start().await;
+    assert!(!client.is_alive());
+
+    // Must not panic, and must stay callable.
+    client.stop().await;
+    client.stop().await;
+}
+
+#[tokio::test]
+async fn stopping_a_server_that_never_bound_is_a_no_op() {
+    let held = StdTcpListener::bind("127.0.0.1:0").expect("hold a port");
+    let port = held.local_addr().expect("local_addr").port();
+
+    let (tx, _rx) = mpsc::channel(4);
+    let mut server = SmppServer::new(
+        IpAddr::from([127, 0, 0, 1]),
+        port,
+        Arc::new(FailureRecorder { failures: tx }),
+    );
+
+    server.start().await;
+    assert!(!server.is_alive());
+
+    server.stop().await;
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn dropping_a_client_that_never_connected_does_not_panic() {
+    let port = closed_port();
+    let (tx, _rx) = mpsc::channel(4);
+    {
+        let mut client = client_to(port, Arc::new(FailureRecorder { failures: tx }));
+        client.start().await;
+    } // Drop runs here and calls stop() when alive; must not panic either way.
+}

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use log::{error, info};
+use log::{error, info, warn};
 use std::{
     net::{IpAddr, SocketAddr},
     sync::{
@@ -17,6 +17,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
+use crate::common::be_u32_at;
 use crate::{
     alert_notification, bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp,
     bind_transmitter, bind_transmitter_resp, cancel_sm, cancel_sm_resp,
@@ -816,11 +817,7 @@ impl SmppServer {
                                     // Try read sequence_number in case we need a generic_nack.
                                     // If we have at least 16 bytes we are able to read sequence number, if not set it to 0x00000000 as advised in SMPP 3.4 spec
                                     let potential_seq_no = if pdu_length >= 16 {
-                                        u32::from_be_bytes(
-                                            pdu[12..16]
-                                                .try_into()
-                                                .expect("Can not read sequence_number"),
-                                        )
+                                        be_u32_at(&pdu, 12)
                                     } else {
                                         0
                                     };
@@ -851,8 +848,7 @@ impl SmppServer {
                                                             )
                                                             .await;
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
-                                                        if session_state.is_ok() {
-                                                            let state = session_state.unwrap();
+                                                        if let Ok(state) = session_state {
                                                             state
                                                                 .read_loop(
                                                                     system_id,
@@ -871,10 +867,11 @@ impl SmppServer {
                                                             error,
                                                         )
                                                         .encode();
-                                                        stream
-                                                            .write_all(&error)
-                                                            .await
-                                                            .expect("Can not write to stream");
+                                                        if let Err(e) =
+                                                            stream.write_all(&error).await
+                                                        {
+                                                            error!("Connection from {} on server {}: could not send the bind rejection ({}), the peer is gone", connection_information.client_address, connection_information.server_address, e);
+                                                        }
                                                     }
                                                 }
                                             } else if header.command_id
@@ -901,8 +898,7 @@ impl SmppServer {
                                                             )
                                                             .await;
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
-                                                        if session_state.is_ok() {
-                                                            let state = session_state.unwrap();
+                                                        if let Ok(state) = session_state {
                                                             state
                                                                 .read_loop(
                                                                     system_id,
@@ -922,10 +918,11 @@ impl SmppServer {
                                                                 error,
                                                             )
                                                             .encode();
-                                                        stream
-                                                            .write_all(&error)
-                                                            .await
-                                                            .expect("Can not write to stream");
+                                                        if let Err(e) =
+                                                            stream.write_all(&error).await
+                                                        {
+                                                            error!("Connection from {} on server {}: could not send the bind rejection ({}), the peer is gone", connection_information.client_address, connection_information.server_address, e);
+                                                        }
                                                     }
                                                 }
                                             } else if header.command_id
@@ -952,8 +949,7 @@ impl SmppServer {
                                                             )
                                                             .await;
                                                         // Note from now on the state handler is handling writes to the stream, so we only need to check whether it succeeded or not to be able to go into session mode
-                                                        if session_state.is_ok() {
-                                                            let state = session_state.unwrap();
+                                                        if let Ok(state) = session_state {
                                                             state
                                                                 .read_loop(
                                                                     system_id,
@@ -973,10 +969,11 @@ impl SmppServer {
                                                                 error,
                                                             )
                                                             .encode();
-                                                        stream
-                                                            .write_all(&error)
-                                                            .await
-                                                            .expect("Can not write to stream");
+                                                        if let Err(e) =
+                                                            stream.write_all(&error).await
+                                                        {
+                                                            error!("Connection from {} on server {}: could not send the bind rejection ({}), the peer is gone", connection_information.client_address, connection_information.server_address, e);
+                                                        }
                                                     }
                                                 }
                                             } else {
@@ -987,20 +984,22 @@ impl SmppServer {
                                                     SmppError::ESME_RINVBNDSTS,
                                                     potential_seq_no,
                                                 );
-                                                stream
-                                                    .write_all(&generic_nack.encode())
-                                                    .await
-                                                    .expect("Can not write to stream");
+                                                if let Err(e) =
+                                                    stream.write_all(&generic_nack.encode()).await
+                                                {
+                                                    error!("Connection from {} on server {}: could not send generic_nack ({}), the peer is gone", connection_information.client_address, connection_information.server_address, e);
+                                                }
                                             }
                                         }
                                         Err(error) => {
                                             error!("Unable to decode command_header for PDU, sending {:?} in generic_nack", error);
                                             let generic_nack =
                                                 generic_nack::new(error, potential_seq_no);
-                                            stream
-                                                .write_all(&generic_nack.encode())
-                                                .await
-                                                .expect("Can not write to stream");
+                                            if let Err(e) =
+                                                stream.write_all(&generic_nack.encode()).await
+                                            {
+                                                error!("Connection from {} on server {}: could not send generic_nack ({}), the peer is gone", connection_information.client_address, connection_information.server_address, e);
+                                            }
                                         }
                                     }
                                 }
@@ -1022,10 +1021,13 @@ impl SmppServer {
 
         info!("Stopping smpp server");
         self.alive.store(false, Ordering::SeqCst);
-        self.handle
-            .take()
-            .expect("Called stop on non-running thread")
-            .abort();
+        match self.handle.take() {
+            Some(handle) => handle.abort(),
+            // Reachable whenever start() returned without spawning, i.e. the
+            // listening socket could not be bound. Stopping something that never
+            // ran is a no-op, not a panic.
+            None => warn!("stop() called on an smpp server that is not running"),
+        }
     }
 }
 
