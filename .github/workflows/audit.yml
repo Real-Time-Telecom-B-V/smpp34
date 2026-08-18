@@ -1,11 +1,16 @@
-# .github/workflows/audit.yml — RustSec advisory + license/source audit.
+# .github/workflows/audit.yml — dependency policy + RustSec advisories.
 #
-# RustSec advisories are time-varying: a new advisory can land against an
-# unchanged dependency, so this runs on a schedule as well as on every change to
-# the dependency set. It also runs on every pull request, so a lockfile bump is
-# audited BEFORE it is merged rather than only after it lands on main. No paths
-# filter on the PR trigger on purpose: this is a required check, and a filtered
-# trigger would never report on a PR that misses the filter, blocking it.
+# Split deliberately, because the two halves have different failure semantics.
+#
+# `cargo-deny` (bans, licenses, sources) is DETERMINISTIC: its result changes
+# only when the dependency graph changes. A PR that pulls in a copyleft licence,
+# an unvetted git source, or a duplicate-crate blowup fails right there, on the
+# PR that caused it. That makes it a good required check.
+#
+# `advisories` is TIME-VARYING: a new RustSec advisory can land against a
+# dependency nobody touched, which would otherwise wedge an unrelated feature PR
+# through no fault of its author. So it never runs on a pull request — weekly and
+# on main only — and raises an issue rather than blocking anyone.
 name: Security audit
 
 on:
@@ -13,10 +18,6 @@ on:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   push:
     branches: [main]
-    paths:
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "deny.toml"
   pull_request:
   workflow_dispatch:
 
@@ -24,6 +25,8 @@ permissions:
   contents: read
 
 jobs:
+  # Required check. No paths filter on purpose: a filtered trigger never reports
+  # on a PR that misses the filter, which would block that PR forever.
   cargo-deny:
     name: cargo-deny
     runs-on: ubuntu-latest
@@ -31,4 +34,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          command: check
+          command: check bans licenses sources
+
+  advisories:
+    name: advisories
+    # Never on a pull request: see the header.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # to raise the advisory rather than fail silently
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+
+      # A failed scheduled run is easy to miss, so make it something with an
+      # assignee-shaped home. Comments on the existing issue instead of opening a
+      # duplicate every Monday.
+      - name: Raise the advisory as an issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="cargo-deny: RustSec advisory affecting this crate"
+          body="The advisory audit failed on \`$GITHUB_SHA\`.\n\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\n\nThis does not block pull requests. Fix by bumping the affected dependency, or record a deliberate exception in \`deny.toml\`."
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            printf '%b' "$body" | gh issue comment "$existing" --body-file -
+          else
+            printf '%b' "$body" | gh issue create --title "$title" --body-file -
+          fi
