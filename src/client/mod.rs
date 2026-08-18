@@ -27,6 +27,7 @@ use tokio_native_tls::{native_tls, TlsConnector, TlsStream};
 use uuid::Uuid;
 
 use crate::common::be_u32_at;
+use crate::common::{frame_first_pdu, Framing};
 use crate::{
     alert_notification, bind_receiver, bind_transceiver, bind_transmitter, cancel_sm,
     cancel_sm_resp, data_sm, data_sm_resp, deliver_sm, deliver_sm_resp, enquire_link, generic_nack,
@@ -34,6 +35,7 @@ use crate::{
     submit_sm_multi_resp, submit_sm_resp, unbind, unbind_resp, CommandHeader, CommandId,
     DestAddress, SmppConnectionInformation, SmppError, SmppReply, Tlv, TlvTag, WriteFrame,
 };
+use std::io::Cursor;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BIND_TYPE {
@@ -1205,6 +1207,7 @@ impl SmppClient {
     }
 
     pub async fn start(&mut self) {
+        const MAX_PDU_LEN: usize = 1024 * 1024;
         if self.alive.load(Ordering::SeqCst) {
             panic!("Can not start client twice")
         }
@@ -1311,12 +1314,47 @@ impl SmppClient {
             info!("Bind PDU sent, waiting for response");
             let session_init_timer_duration =
                 tokio::time::Duration::from_millis(session_init_timer);
-            let mut buffer = [0; 1024]; // Not using BytesMut here as we always first get a bind before expecting big traffic so chose a low buffer size
-            let first_read = timeout(session_init_timer_duration, stream.read(&mut buffer)).await;
+            // Frame the handshake instead of assuming one read is one PDU. An SMSC
+            // with traffic already queued sends it the instant it accepts the bind,
+            // so its first deliver_sm/enquire_link routinely lands in the same TCP
+            // segment as the bind response. Reading `n` bytes and handing all of
+            // them to CommandHeader::decode failed with "PDU length N does not
+            // match command_length M" and tore the session down before it started.
+            //
+            // The handshake fills the buffer the session read loop goes on to use,
+            // so whatever arrived behind the bind response is preserved and framed
+            // by that loop rather than discarded.
+            let mut handshake_buffer = BytesMut::with_capacity(buffer_size.max(1024));
+            let first_read = loop {
+                match frame_first_pdu(&handshake_buffer, MAX_PDU_LEN) {
+                    Framing::Complete(len) => break Ok(Ok(handshake_buffer.split_to(len))),
+                    Framing::Invalid(command_length) => {
+                        error!(
+                            "invalid command_length {} in bind response from server {}, closing connection",
+                            command_length, server_socket_address
+                        );
+                        break Ok(Ok(BytesMut::new()));
+                    }
+                    Framing::Incomplete => {
+                        // StreamWrapper exposes an inherent read(), not AsyncRead,
+                        // so accumulate through a chunk.
+                        let mut chunk = [0u8; 1024];
+                        match timeout(session_init_timer_duration, stream.read(&mut chunk)).await {
+                            // EOF before a whole PDU arrived.
+                            Ok(Ok(0)) => break Ok(Ok(BytesMut::new())),
+                            Ok(Ok(n)) => {
+                                handshake_buffer.extend_from_slice(&chunk[..n]);
+                                continue;
+                            }
+                            Ok(Err(e)) => break Ok(Err(e)),
+                            Err(e) => break Err(e),
+                        }
+                    }
+                }
+            };
 
             match first_read {
-                Ok(Ok(n)) => {
-                    let pdu = buffer[0..n].to_vec();
+                Ok(Ok(pdu)) => {
                     let pdu_length = pdu.len();
 
                     // Try read sequence_number in case we need a generic_nack.
@@ -1346,7 +1384,19 @@ impl SmppClient {
 
                                 alive.store(true, Ordering::SeqCst);
 
-                                let (mut reader, mut writer) = stream.split().await;
+                                let (read_half, mut writer) = stream.split().await;
+                                // Anything that shared a TCP segment with the bind
+                                // response is replayed ahead of the socket so the read
+                                // loop frames it like any other bytes. Parking it in
+                                // `buffer` would not work: the loop only drains after a
+                                // read returns data, so a peer that then went quiet
+                                // would strand it.
+                                let mut reader: Box<dyn AsyncRead + Unpin + Send> =
+                                    if handshake_buffer.is_empty() {
+                                        read_half
+                                    } else {
+                                        Box::new(Cursor::new(handshake_buffer).chain(read_half))
+                                    };
 
                                 let (tx, mut rx) = channel::<WriteFrame>(100);
                                 let pending_requests: Arc<
@@ -1502,7 +1552,6 @@ impl SmppClient {
                                     .await;
 
                                 // Bound on one PDU's command_length (see server/state.rs).
-                                const MAX_PDU_LEN: usize = 1024 * 1024;
                                 // Main read loop
                                 while alive.load(Ordering::SeqCst) {
                                     let result =

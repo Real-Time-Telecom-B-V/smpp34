@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+### Fixed
+
+- **The bind handshake now frames the byte stream instead of assuming one read is
+  one PDU.** Both sides read the handshake with a single `read()` and passed the
+  whole buffer to `CommandHeader::decode`, which rejects it when
+  `pdu.len() != command_length`. TCP has no message boundaries, so a peer that
+  puts anything on the wire straight after its bind PDU can have it coalesce into
+  the same segment — and the session was then torn down before it started, with
+  every request on it failing instantly.
+  - SMSC -> ESME: an SMSC with traffic queued sends it the moment it accepts the
+    bind, so its first `deliver_sm` catches up with its own
+    `bind_transceiver_resp`. The client logged
+    `PDU length 451 does not match command_length 31` then
+    `Unable to decode bind response`.
+  - ESME -> SMSC: symmetric. An ESME that pipelines its first `submit_sm` without
+    waiting for the bind response is doing something legal, and the SMSC rejected
+    the whole read.
+  - Bytes that arrived behind the bind PDU are no longer discarded: they are
+    replayed ahead of the socket so the session read loop frames them like any
+    other bytes. (Parking them in the read buffer does not work — that loop only
+    drains after a read returns data, so a peer that then went quiet would strand
+    them.)
+
+  This surfaced as a roughly 1-in-20 failure of
+  `deliver_sm_resp_is_never_dropped_under_load` under two-CPU pinning, where all
+  20 000 sends failed at once rather than the handful a correlation race would
+  lose. It predates the 1.4.0 changes — reproduced at the same rate on the commit
+  before them.
+
 ## [1.4.0] - 2026-08-17
 
 Nothing in this release changes an existing signature or documented guarantee a
