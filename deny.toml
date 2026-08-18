@@ -35,7 +35,10 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
-    "MPL-2.0",
+    # MPL-2.0 is deliberately absent. It was the only non-permissive licence on
+    # this list and nothing in the tree uses it, so pre-approving weak copyleft
+    # only meant a future dependency could introduce it without anyone looking.
+    # Re-add it as a deliberate decision, never to make a build pass.
 ]
 confidence-threshold = 0.9
 
