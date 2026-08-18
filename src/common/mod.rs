@@ -290,6 +290,42 @@ pub(crate) fn be_u32_at(bytes: &[u8], offset: usize) -> u32 {
         .unwrap_or(0)
 }
 
+/// How much of a PDU is present at the front of an accumulated read buffer.
+///
+/// SMPP runs over TCP, which is a byte stream with no message boundaries, so a
+/// single `read()` can return half a PDU, exactly one, or several back to back.
+/// The session read loops have always framed correctly; the bind handshake did
+/// not — it treated one read as one PDU and rejected the buffer outright when a
+/// peer put anything on the wire behind its bind PDU. This is the shared
+/// decision both handshakes now use.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Framing {
+    /// Fewer bytes than the header, or the header's `command_length` has not all
+    /// arrived yet. Read more.
+    Incomplete,
+    /// A whole PDU occupies the first `usize` bytes.
+    Complete(usize),
+    /// `command_length` is outside anything a peer may legitimately send. A
+    /// length-delimited stream cannot resync from this, so the caller must close
+    /// the connection rather than wait for bytes that will never come.
+    Invalid(u32),
+}
+
+/// Frame the first PDU in `buffer`, bounded by `max_len`.
+pub(crate) fn frame_first_pdu(buffer: &[u8], max_len: usize) -> Framing {
+    if buffer.len() < 16 {
+        return Framing::Incomplete;
+    }
+    let command_length = be_u32_at(buffer, 0);
+    if (command_length as usize) < 16 || command_length as usize > max_len {
+        return Framing::Invalid(command_length);
+    }
+    if buffer.len() < command_length as usize {
+        return Framing::Incomplete;
+    }
+    Framing::Complete(command_length as usize)
+}
+
 impl SmppError {
     /// Map a `command_status` received off the wire onto its variant.
     ///

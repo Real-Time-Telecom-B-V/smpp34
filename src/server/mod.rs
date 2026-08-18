@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use bytes::BytesMut;
 use log::{error, info, warn};
 use std::{
     net::{IpAddr, SocketAddr},
@@ -18,6 +19,7 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::common::be_u32_at;
+use crate::common::{frame_first_pdu, Framing};
 use crate::{
     alert_notification, bind_receiver, bind_receiver_resp, bind_transceiver, bind_transceiver_resp,
     bind_transmitter, bind_transmitter_resp, cancel_sm, cancel_sm_resp,
@@ -804,14 +806,50 @@ impl SmppServer {
                                 connection_information.server_address,
                                 session_init_timer
                             );
-                            let mut buffer = [0; 1024]; // Not using BytesMut here as we always first get a bind before expecting big traffic so choose a low buffer size
-                            let first_read =
-                                timeout(session_init_timer_duration, stream.read(&mut buffer))
-                                    .await;
+                            // Frame the handshake rather than assuming one read is
+                            // one PDU. A high-throughput ESME may pipeline its first
+                            // submit_sm without waiting for bind_transceiver_resp, so
+                            // it can share a TCP segment with the bind request; the
+                            // old code handed the whole read to CommandHeader::decode
+                            // and rejected it as a length mismatch. Anything behind
+                            // the bind PDU stays in the buffer and is handed to the
+                            // session read loop.
+                            const MAX_PDU_LEN: usize = 1024 * 1024;
+                            let mut handshake_buffer =
+                                BytesMut::with_capacity(buffer_size.max(1024));
+                            let first_read = loop {
+                                match frame_first_pdu(&handshake_buffer, MAX_PDU_LEN) {
+                                    Framing::Complete(len) => {
+                                        break Ok(Ok(handshake_buffer.split_to(len)))
+                                    }
+                                    Framing::Invalid(command_length) => {
+                                        error!(
+                                            "Connection from {} on server {}: invalid command_length {} in bind request, closing connection",
+                                            connection_information.client_address,
+                                            connection_information.server_address,
+                                            command_length
+                                        );
+                                        break Ok(Ok(BytesMut::new()));
+                                    }
+                                    Framing::Incomplete => {
+                                        match timeout(
+                                            session_init_timer_duration,
+                                            stream.read_buf(&mut handshake_buffer),
+                                        )
+                                        .await
+                                        {
+                                            // EOF before a whole PDU arrived.
+                                            Ok(Ok(0)) => break Ok(Ok(BytesMut::new())),
+                                            Ok(Ok(_)) => continue,
+                                            Ok(Err(e)) => break Ok(Err(e)),
+                                            Err(e) => break Err(e),
+                                        }
+                                    }
+                                }
+                            };
 
                             match first_read {
-                                Ok(Ok(n)) => {
-                                    let pdu = buffer[0..n].to_vec();
+                                Ok(Ok(pdu)) => {
                                     let pdu_length = pdu.len();
 
                                     // Try read sequence_number in case we need a generic_nack.
@@ -856,6 +894,7 @@ impl SmppServer {
                                                                     inactivity_timer,
                                                                     response_timer,
                                                                     buffer_size,
+                                                                    handshake_buffer,
                                                                 )
                                                                 .await; // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         }
@@ -906,6 +945,7 @@ impl SmppServer {
                                                                     inactivity_timer,
                                                                     response_timer,
                                                                     buffer_size,
+                                                                    handshake_buffer,
                                                                 )
                                                                 .await; // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         }
@@ -957,6 +997,7 @@ impl SmppServer {
                                                                     inactivity_timer,
                                                                     response_timer,
                                                                     buffer_size,
+                                                                    handshake_buffer,
                                                                 )
                                                                 .await; // When this function stops either the TCP connection was interrupted or some unbind event happened. Nothing else todo.
                                                         }

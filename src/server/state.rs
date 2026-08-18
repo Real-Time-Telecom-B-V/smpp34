@@ -9,6 +9,8 @@ use std::{
 };
 
 use bytes::BytesMut;
+use std::io::Cursor;
+use tokio::io::AsyncRead;
 
 use log::{error, info};
 use tokio::{
@@ -52,13 +54,26 @@ async fn read_loop(
     response_timer: u64,
     buffer_size: usize,
     session_id: String,
+    // Bytes that arrived behind the bind PDU in the same TCP segment. The
+    // handshake framed off exactly the bind request and left these here; they are
+    // real PDUs and must be framed by this loop, not dropped.
+    initial_buffer: BytesMut,
 ) -> CLOSED {
     info!("[{} on server {}] {} going into read_loop with enquire_link_timer {}ms and inactivity_timer {}ms and read buffer size {} bytes", connection_information.client_address, connection_information.server_address, bound_type, enquire_link_timer, inactivity_timer, buffer_size);
     let sequence_number = Arc::new(AtomicU32::new(1));
     let alive = Arc::new(AtomicBool::new(false));
     alive.store(true, Ordering::SeqCst);
 
-    let (mut reader, mut writer) = stream.into_split();
+    let (read_half, mut writer) = stream.into_split();
+    // Anything that shared a TCP segment with the bind PDU is replayed ahead of
+    // the socket, so the read loop frames it exactly like any other bytes. Parking
+    // it in `buffer` would not work: the loop only drains the buffer after a read
+    // returns data, so a peer that then went quiet would strand it.
+    let mut reader: Box<dyn AsyncRead + Unpin + Send> = if initial_buffer.is_empty() {
+        Box::new(read_half)
+    } else {
+        Box::new(Cursor::new(initial_buffer).chain(read_half))
+    };
 
     let (tx, mut rx) = channel::<WriteFrame>(100);
 
@@ -1100,6 +1115,7 @@ impl BOUND_TX {
         inactivity_timer: u64,
         response_timer: u64,
         buffer_size: usize,
+        initial_buffer: BytesMut,
     ) -> CLOSED {
         read_loop(
             BOUND_TYPE::BOUND_TX,
@@ -1112,6 +1128,7 @@ impl BOUND_TX {
             response_timer,
             buffer_size,
             self.session_id,
+            initial_buffer,
         )
         .await
     }
@@ -1133,6 +1150,7 @@ impl BOUND_RX {
         inactivity_timer: u64,
         response_timer: u64,
         buffer_size: usize,
+        initial_buffer: BytesMut,
     ) -> CLOSED {
         read_loop(
             BOUND_TYPE::BOUND_RX,
@@ -1145,6 +1163,7 @@ impl BOUND_RX {
             response_timer,
             buffer_size,
             self.session_id,
+            initial_buffer,
         )
         .await
     }
@@ -1166,6 +1185,7 @@ impl BOUND_TRX {
         inactivity_timer: u64,
         response_timer: u64,
         buffer_size: usize,
+        initial_buffer: BytesMut,
     ) -> CLOSED {
         read_loop(
             BOUND_TYPE::BOUND_TRX,
@@ -1178,6 +1198,7 @@ impl BOUND_TRX {
             response_timer,
             buffer_size,
             self.session_id,
+            initial_buffer,
         )
         .await
     }
