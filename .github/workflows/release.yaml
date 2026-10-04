@@ -129,13 +129,14 @@ jobs:
     needs: verify-version
     # A free-threaded interpreter cannot load an abi3 wheel, and abi3t is 3.15+
     # only — so today's free-threaded builds get version-specific (cp3XXt) wheels.
+    # No 3.13t: pyo3 0.29 refuses free-threaded CPython below 3.14 at build time.
     # Best-effort until the toolchain settles; does not block the abi3 wheels.
     continue-on-error: true
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
       matrix:
-        py: ["3.13t", "3.14t"]
+        py: ["3.14t"]
         platform:
           - { runner: ubuntu-latest, target: x86_64 }
           - { runner: macos-14, target: aarch64 }
