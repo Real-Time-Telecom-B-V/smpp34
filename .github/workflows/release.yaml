@@ -13,16 +13,21 @@
 #
 # The PyPI wheel jobs (build-wheels*, build-sdist, pypi-publish) are GATED behind
 # the repo variable `PYPI_PUBLISH` (Settings → Variables → Actions). They stay
-# dormant — and crates.io releases keep working — until:
-#   1. RTT has its own PyPI organisation (NOT the `siphon` org), and
-#   2. a pending Trusted Publisher for `smpp34` is configured there pointing at
-#      this repo + workflow + the `pypi` environment, and
-#   3. `PYPI_PUBLISH` is set to `true`.
+# dormant — and crates.io releases keep working — until a Trusted Publisher for
+# `smpp34` is configured on PyPI pointing at this repo + workflow + the `pypi`
+# environment, and `PYPI_PUBLISH` is set to `true`.
+#
+# Manual runs (workflow_dispatch) are a REHEARSAL: they build the full wheel
+# matrix + sdist and publish nothing, to neither registry. A PyPI upload cannot
+# be replaced, and a wheel job that fails on a tag leaves the version on
+# crates.io with no way to add it to PyPI afterwards, so the matrix has to be
+# provable without a tag.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -36,6 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cargo version must equal the tag
+        if: github.event_name == 'push'
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
           cargo_version="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.*)"/\1/')"
@@ -46,6 +52,7 @@ jobs:
           fi
 
   crates-io:
+    if: github.event_name == 'push'
     needs: verify-version
     runs-on: ubuntu-latest
     permissions:
@@ -63,6 +70,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   sbom:
+    if: github.event_name == 'push'
     needs: verify-version
     runs-on: ubuntu-latest
     steps:
@@ -85,7 +93,7 @@ jobs:
   # ── PyPI wheels (gated on the PYPI_PUBLISH repo variable; see header) ────────
   build-wheels:
     name: wheels ${{ matrix.platform.runner }} ${{ matrix.platform.target }}
-    if: vars.PYPI_PUBLISH == 'true'
+    if: vars.PYPI_PUBLISH == 'true' || github.event_name == 'workflow_dispatch'
     needs: verify-version
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -94,7 +102,7 @@ jobs:
         platform:
           - { runner: ubuntu-latest, target: x86_64 }
           - { runner: ubuntu-latest, target: aarch64 }
-          - { runner: macos-13, target: x86_64 }
+          - { runner: macos-15-intel, target: x86_64 }
           - { runner: macos-14, target: aarch64 }
           - { runner: windows-latest, target: x64 }
     steps:
@@ -117,7 +125,7 @@ jobs:
 
   build-wheels-freethreaded:
     name: wheels-ft ${{ matrix.py }} ${{ matrix.platform.runner }}
-    if: vars.PYPI_PUBLISH == 'true'
+    if: vars.PYPI_PUBLISH == 'true' || github.event_name == 'workflow_dispatch'
     needs: verify-version
     # A free-threaded interpreter cannot load an abi3 wheel, and abi3t is 3.15+
     # only — so today's free-threaded builds get version-specific (cp3XXt) wheels.
@@ -149,7 +157,7 @@ jobs:
           path: dist
 
   build-sdist:
-    if: vars.PYPI_PUBLISH == 'true'
+    if: vars.PYPI_PUBLISH == 'true' || github.event_name == 'workflow_dispatch'
     needs: verify-version
     runs-on: ubuntu-latest
     steps:
@@ -165,7 +173,7 @@ jobs:
 
   pypi-publish:
     name: Publish to PyPI (Trusted Publishing)
-    if: vars.PYPI_PUBLISH == 'true'
+    if: vars.PYPI_PUBLISH == 'true' && github.event_name == 'push'
     needs: [build-wheels, build-wheels-freethreaded, build-sdist]
     runs-on: ubuntu-latest
     environment: pypi
