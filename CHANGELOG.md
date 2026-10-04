@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-04
+
 ### Changed
 
 - **The client's TLS transport is now `rustls` instead of system OpenSSL.**
@@ -35,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ### Added
 
+- **Wheels on PyPI.** `pip install smpp34` now works: this is the first release
+  published there, built from the same source and version as the crate. abi3
+  wheels for CPython 3.9+ on Linux (x86_64, aarch64), macOS (x86_64, arm64) and
+  Windows (x64), plus free-threaded CPython 3.14 wheels on Linux x86_64, macOS
+  arm64 and Windows.
 - Tests for the TLS transport, which had none: a session against a TLS server
   with a trusted certificate, an untrusted issuer, a certificate issued for
   another name, an unparseable server name, and an empty trust store.
@@ -323,7 +330,8 @@ privately; this is the initial open-source cut under the MIT license.
 - Removed the unused `tokio-rustls` dependency (the TLS path uses
   `tokio-native-tls`); moved `env_logger` / `test-log` to dev-dependencies.
 
-[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.4.1...main
+[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.5.0...main
+[1.5.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.5.0
 [1.4.1]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.4.1
 [1.4.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.3.0
