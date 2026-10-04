@@ -18,9 +18,9 @@ ignore = []
 [bans]
 multiple-versions = "warn"
 wildcards = "warn"
-# NOTE: smpp34's TLS path uses tokio-native-tls, which links the system OpenSSL
-# (a C library) via openssl-sys. This is intentional, so there is no C-FFI ban
-# list here. (A future move to rustls would make a zero-C build possible.)
+# NOTE: smpp34's TLS path is rustls with the ring backend. No system library is
+# linked, but ring still compiles C and assembly at build time, so this is not a
+# zero-C build and there is no C-FFI ban list here.
 
 [licenses]
 # The crate is MIT; keep dependencies OSI-permissive.

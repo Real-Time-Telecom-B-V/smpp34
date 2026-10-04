@@ -11,7 +11,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use tokio::{
     io::{self, split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
@@ -23,7 +23,9 @@ use tokio::{
     time::{interval, timeout},
 };
 
-use tokio_native_tls::{native_tls, TlsConnector, TlsStream};
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{self, ClientConfig, RootCertStore};
+use tokio_rustls::{client::TlsStream, TlsConnector};
 use uuid::Uuid;
 
 use crate::common::be_u32_at;
@@ -1045,8 +1047,8 @@ impl StreamWrapper {
     }
 
     pub fn new_tls(stream: TlsStream<TcpStream>) -> io::Result<Self> {
-        let server_address = stream.get_ref().get_ref().get_ref().peer_addr()?;
-        let client_address = stream.get_ref().get_ref().get_ref().local_addr()?;
+        let server_address = stream.get_ref().0.peer_addr()?;
+        let client_address = stream.get_ref().0.local_addr()?;
 
         let (read_half, write_half) = split(stream);
         Ok(StreamWrapper {
@@ -1085,6 +1087,49 @@ impl StreamWrapper {
     }
 }
 
+/// The trust anchors of the operating system, the same set the previous
+/// OpenSSL-backed transport consulted (`SSL_CERT_FILE` / `SSL_CERT_DIR` are
+/// still honoured), so an SMSC behind a private CA installed in the system
+/// store keeps working.
+fn system_root_store() -> RootCertStore {
+    let loaded = rustls_native_certs::load_native_certs();
+    for error in &loaded.errors {
+        warn!("Unable to load a system trust anchor: {error}");
+    }
+
+    let mut roots = RootCertStore::empty();
+    let (_, ignored) = roots.add_parsable_certificates(loaded.certs);
+    if ignored > 0 {
+        debug!("Ignored {ignored} system trust anchors that are not valid X.509");
+    }
+    roots
+}
+
+/// TLS client configuration trusting `roots`: TLS 1.2 and 1.3, no client
+/// certificate.
+///
+/// The crypto provider is named explicitly. `ClientConfig::builder()` picks the
+/// process-wide default and panics when there is none, which is what happens
+/// the moment another crate in the build enables a second rustls backend.
+fn tls_client_config(roots: RootCertStore) -> Result<Arc<ClientConfig>, String> {
+    // Without this every handshake would fail with an "unknown issuer" that
+    // sends people looking at the SMSC's certificate instead of at this host.
+    if roots.is_empty() {
+        return Err(
+            "TLS connector setup failed: no trusted root certificates available".to_string(),
+        );
+    }
+
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("TLS connector setup failed: {e}"))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
+    Ok(Arc::new(config))
+}
+
 /// Open the transport for a session, plain or TLS.
 ///
 /// Every step names what failed and where, because this is the string the
@@ -1095,20 +1140,36 @@ async fn establish_stream(
     server_port: u16,
     tls: bool,
 ) -> Result<StreamWrapper, String> {
+    let tls_config = if tls {
+        Some(tls_client_config(system_root_store())?)
+    } else {
+        None
+    };
+
+    establish_stream_with(server_address, server_port, tls_config).await
+}
+
+/// [`establish_stream`] with the TLS configuration supplied by the caller
+/// (`None` for a plain session), so the tests can trust a fixture CA instead of
+/// the system store.
+async fn establish_stream_with(
+    server_address: &str,
+    server_port: u16,
+    tls_config: Option<Arc<ClientConfig>>,
+) -> Result<StreamWrapper, String> {
     let address = format!("{}:{}", server_address, server_port);
 
-    if tls {
-        let connector = native_tls::TlsConnector::builder()
-            .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-            .build()
-            .map_err(|e| format!("TLS connector setup failed: {e}"))?;
-        let connector = TlsConnector::from(connector);
+    if let Some(tls_config) = tls_config {
+        // The name the certificate is verified against, a DNS name or an IP.
+        let server_name = ServerName::try_from(server_address.to_owned())
+            .map_err(|e| format!("TLS handshake with {address} failed: {e}"))?;
+        let connector = TlsConnector::from(tls_config);
 
         let stream = TcpStream::connect(&address)
             .await
             .map_err(|e| format!("TCP connect to {address} failed: {e}"))?;
         let stream = connector
-            .connect(server_address, stream)
+            .connect(server_name, stream)
             .await
             .map_err(|e| format!("TLS handshake with {address} failed: {e}"))?;
 
@@ -2478,5 +2539,155 @@ mod tests {
         assert_eq!(pdu.short_message, b"hello".to_vec());
         assert_eq!(pdu.registered_delivery, 1);
         assert_eq!(pdu.data_coding, 8);
+    }
+
+    // ── TLS transport ────────────────────────────────────────────────────────
+    // Fixtures: tests/fixtures/tls (see the README there). The leaf certificate
+    // is valid for `localhost` only.
+
+    use tokio_rustls::rustls::pki_types::pem::PemObject;
+    use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use tokio_rustls::rustls::ServerConfig;
+    use tokio_rustls::TlsAcceptor;
+
+    const TEST_CA: &[u8] = include_bytes!("../../tests/fixtures/tls/ca.pem");
+    const OTHER_CA: &[u8] = include_bytes!("../../tests/fixtures/tls/other-ca.pem");
+    const LEAF_CERTIFICATE: &[u8] = include_bytes!("../../tests/fixtures/tls/leaf.pem");
+    const LEAF_KEY: &[u8] = include_bytes!("../../tests/fixtures/tls/leaf.key");
+
+    fn roots_trusting(ca_pem: &[u8]) -> RootCertStore {
+        let mut roots = RootCertStore::empty();
+        roots
+            .add(CertificateDer::from_pem_slice(ca_pem).unwrap())
+            .unwrap();
+        roots
+    }
+
+    /// A TLS server on a loopback port presenting the fixture leaf certificate.
+    /// Echoes whatever each connection sends; a failed handshake just ends that
+    /// connection.
+    async fn spawn_tls_echo_server() -> u16 {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from_pem_slice(LEAF_CERTIFICATE).unwrap()],
+                PrivateKeyDer::from_pem_slice(LEAF_KEY).unwrap(),
+            )
+            .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut stream) = acceptor.accept(socket).await else {
+                        return;
+                    };
+                    let mut buffer = [0u8; 64];
+                    while let Ok(read) = stream.read(&mut buffer).await {
+                        if read == 0 || stream.write_all(&buffer[..read]).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+
+        port
+    }
+
+    // `StreamWrapper` is not `Debug`, so `unwrap_err` is not available.
+    fn expect_failure(result: Result<StreamWrapper, String>) -> String {
+        match result {
+            Ok(_) => panic!("the TLS session was established"),
+            Err(error) => error,
+        }
+    }
+
+    #[tokio::test]
+    async fn tls_session_with_a_trusted_certificate_carries_data() {
+        let port = spawn_tls_echo_server().await;
+        let config = tls_client_config(roots_trusting(TEST_CA)).unwrap();
+
+        let mut stream = match establish_stream_with("localhost", port, Some(config)).await {
+            Ok(stream) => stream,
+            Err(error) => panic!("{error}"),
+        };
+
+        // enquire_link: a whole PDU is its 16-byte header.
+        let enquire_link = [
+            0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01,
+        ];
+        assert_eq!(stream.write(&enquire_link).await.unwrap(), 16);
+
+        let mut echoed = [0u8; 16];
+        let mut filled = 0;
+        while filled < echoed.len() {
+            let read = stream.read(&mut echoed[filled..]).await.unwrap();
+            assert_ne!(read, 0, "the server closed the session early");
+            filled += read;
+        }
+        assert_eq!(echoed, enquire_link);
+        assert_eq!(stream.peer_addr().port(), port);
+    }
+
+    #[tokio::test]
+    async fn tls_rejects_a_certificate_from_an_untrusted_issuer() {
+        let port = spawn_tls_echo_server().await;
+        let config = tls_client_config(roots_trusting(OTHER_CA)).unwrap();
+
+        let error = expect_failure(establish_stream_with("localhost", port, Some(config)).await);
+
+        assert!(
+            error.starts_with(&format!("TLS handshake with localhost:{port} failed: ")),
+            "{error}"
+        );
+        assert!(error.contains("UnknownIssuer"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn tls_rejects_a_certificate_issued_for_another_name() {
+        let port = spawn_tls_echo_server().await;
+        let config = tls_client_config(roots_trusting(TEST_CA)).unwrap();
+
+        // Same server and a trusted issuer, but the certificate only names
+        // `localhost`.
+        let error = expect_failure(establish_stream_with("127.0.0.1", port, Some(config)).await);
+
+        assert!(
+            error.starts_with(&format!("TLS handshake with 127.0.0.1:{port} failed: ")),
+            "{error}"
+        );
+        assert!(error.contains("not valid for name"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn tls_rejects_a_server_name_that_is_not_a_hostname_or_address() {
+        let config = tls_client_config(roots_trusting(TEST_CA)).unwrap();
+
+        // Fails before any connect: port 1 is never dialled.
+        let error = expect_failure(establish_stream_with("not a hostname", 1, Some(config)).await);
+
+        assert!(
+            error.starts_with("TLS handshake with not a hostname:1 failed: "),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn tls_setup_fails_without_any_trusted_root() {
+        let error = tls_client_config(RootCertStore::empty()).unwrap_err();
+
+        assert_eq!(
+            error,
+            "TLS connector setup failed: no trusted root certificates available"
+        );
     }
 }

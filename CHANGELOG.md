@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+### Changed
+
+- **The client's TLS transport is now `rustls` instead of system OpenSSL.**
+  `tokio-native-tls` is replaced by `tokio-rustls` with the `ring` backend, and
+  `rustls-native-certs` for the trust store. No API changes: `tls: bool` is
+  still the whole surface, in Rust and in Python. The reason is packaging. A
+  mandatory dependency on system OpenSSL meant the Python wheel could not be
+  built in a standard manylinux container at all, and every Rust consumer
+  needed OpenSSL headers at build time whether or not they used TLS.
+
+  **If you bind over TLS, check these before upgrading.** Handshakes that
+  worked before can now fail:
+  - Only ECDHE key exchange with AEAD ciphers is offered. A peer limited to RSA
+    key exchange or CBC suites on TLS 1.2 can no longer be reached.
+  - The server certificate must carry a subjectAltName matching the address you
+    connect to. A certificate naming the host only in its CN is rejected, as
+    are SHA-1 signatures and weak keys.
+
+  Unchanged: TLS 1.2 is still the minimum, the operating system's trust store
+  is still what is consulted (including `SSL_CERT_FILE` / `SSL_CERT_DIR`), and
+  the `on_connection_failed` messages keep their wording and context.
+- An empty system trust store is now reported as
+  `TLS connector setup failed: no trusted root certificates available` instead
+  of surfacing later as a certificate error against every peer.
+
+### Added
+
+- Tests for the TLS transport, which had none: a session against a TLS server
+  with a trusted certificate, an untrusted issuer, a certificate issued for
+  another name, an unparseable server name, and an empty trust store.
+
 ## [1.4.1] - 2026-08-18
 
 ### Fixed
