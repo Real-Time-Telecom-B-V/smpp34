@@ -254,8 +254,16 @@ vendor-specific tags (0x1400-0x3FFF) pass through byte for byte.
 ## TLS
 
 Pass `tls = true` to `SmppClient::new` to bind over TLS. The TLS transport is
-backed by [`tokio-native-tls`](https://crates.io/crates/tokio-native-tls)
-(system OpenSSL).
+[`rustls`](https://crates.io/crates/rustls) (via `tokio-rustls`, `ring`
+backend), so no system TLS library is needed to build or run.
+
+- TLS 1.2 and 1.3, ECDHE key exchange with AEAD ciphers only. A peer limited to
+  RSA key exchange or CBC suites cannot be reached.
+- The server certificate is verified against the operating system's trust store
+  (`SSL_CERT_FILE` / `SSL_CERT_DIR` are honoured), and against the address you
+  passed, hostname or IP. It must carry a matching subjectAltName; a
+  certificate that only names the host in its CN is rejected.
+- No client certificate (mTLS) and no per-client CA yet.
 
 ## Timers & windowing
 

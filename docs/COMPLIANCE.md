@@ -63,7 +63,7 @@ that form).
 | Sequence-number windowing (configurable window) | ✅ |
 | Async request/response correlation | ✅ |
 | C-Octet-String, Octet-String, integer codecs | ✅ |
-| TLS transport | ✅ (`tokio-native-tls`) |
+| TLS transport | ✅ (`tokio-rustls`, TLS 1.2/1.3) |
 | Raw `short_message` octets + `DeliveryReceipt` parsing | ✅ (GSM 7-bit / UCS-2 *text* encoding of the payload is left to the caller) |
 
 ## Not in scope

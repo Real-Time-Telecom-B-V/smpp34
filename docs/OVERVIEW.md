@@ -56,7 +56,7 @@ can't resync from a bogus length).
 | Async client / server (TX/RX/TRX) | ✅ |
 | Session timers, sequence windowing | ✅ |
 | Pipelined framing (PDUs spanning reads) | ✅ (since 1.1.1) |
-| TLS | ✅ via `tokio-native-tls` (system OpenSSL); system trust store only — no custom CA / mTLS wiring yet |
+| TLS | ✅ via `tokio-rustls` (`ring` backend, no system TLS library); TLS 1.2/1.3; system trust store only — no custom CA / mTLS wiring yet |
 | Memory: flat under load + bind/unbind churn | ✅ (counting-allocator leak check) |
 
 ## Performance & memory
@@ -69,8 +69,8 @@ the starting point for that optimization pass.
 
 ## Remaining design notes
 
-- **TLS → rustls.** The TLS path is OpenSSL-backed (C). Moving to `rustls` would
-  enable a zero-C build and custom-CA / mTLS support — a backward-compatible
-  addition (new minor) when it lands.
+- **TLS: custom CA / mTLS.** The TLS path is `rustls`, trusting the system
+  store only. A per-client CA and a client certificate are a backward-compatible
+  addition (new minor) when they land.
 - **Per-PDU task spawn.** The spawn-per-PDU + per-PDU `to_vec` is the obvious
   throughput lever; a fixed worker pool / borrowed-slice path is a future minor.

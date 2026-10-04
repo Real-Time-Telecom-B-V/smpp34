@@ -32,7 +32,11 @@ bytes = "1.4.0"
 serde = { version = "1.0.205", features = ["derive"] }
 nom = "8"
 chrono = "0.4.38"
-tokio-native-tls = "0.3.1"
+# TLS for the client. rustls with the ring backend needs no system library, so
+# the wheel builds in a bare manylinux container; the OS trust store is still
+# what gets consulted (rustls-native-certs), as it was with native-tls.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-native-certs = "0.8"
 async-trait = "0.1.88"
 downcast-rs = "2.0.1"
 
