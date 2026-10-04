@@ -101,7 +101,9 @@ jobs:
       matrix:
         platform:
           - { runner: ubuntu-latest, target: x86_64 }
-          - { runner: ubuntu-latest, target: aarch64 }
+          # Native ARM runner, not a cross build from x86_64: the manylinux2014
+          # cross image ships a compiler too old for ring's aarch64 assembly.
+          - { runner: ubuntu-24.04-arm, target: aarch64 }
           - { runner: macos-15-intel, target: x86_64 }
           - { runner: macos-14, target: aarch64 }
           - { runner: windows-latest, target: x64 }
