@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — see
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-02
+
+### Fixed
+
+- **A refused `bind_transmitter` or `bind_receiver` is now answered with its
+  `_resp` before the connection closes.** When `on_bind_transmitter` or
+  `on_bind_receiver` returned a rejection, the server dropped the connection
+  without writing anything, so the ESME saw a bare EOF and never got the
+  `command_status` the listener chose. SMPP 3.4 §4.1.2 / §4.1.4 require the
+  response in both cases. It now writes the header-only response (the request's
+  `sequence_number`, the listener's `command_status`, no `system_id`) and then
+  closes, the same as `bind_transceiver` already did. If the peer is already
+  gone the failed write is logged at error with both addresses, no panic. The
+  session never enters a bound state.
+
 ## [1.5.0] - 2026-10-04
 
 ### Changed
@@ -330,7 +345,8 @@ privately; this is the initial open-source cut under the MIT license.
 - Removed the unused `tokio-rustls` dependency (the TLS path uses
   `tokio-native-tls`); moved `env_logger` / `test-log` to dev-dependencies.
 
-[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.5.0...main
+[Unreleased]: https://github.com/Real-Time-Telecom-B-V/smpp34/compare/v1.5.1...main
+[1.5.1]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.5.0
 [1.4.1]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.4.1
 [1.4.0]: https://github.com/Real-Time-Telecom-B-V/smpp34/releases/tag/v1.4.0

@@ -1019,6 +1019,15 @@ impl OPEN {
                 Err(SmppError::ESME_RSYSERR)
             }
         } else {
+            // SMPP 3.4 §4.1.2 / §4.1.4: a refused bind still gets its _resp, so
+            // the ESME learns the command_status instead of seeing a bare close.
+            error!("Connection from {} on server {} with system_id {} was rejected with error {:?}, closing TCP connection", connection_information.client_address, connection_information.server_address, bind_transmitter.system_id, bind_transmitter_resp.get_error());
+            if let Err(e) = stream
+                .write_all(&bind_transmitter_resp.clone().encode())
+                .await
+            {
+                error!("Connection from {} on server {}: could not send the bind_transmitter rejection ({}), the peer is gone", connection_information.client_address, connection_information.server_address, e);
+            }
             Err(bind_transmitter_resp.get_error())
         }
     }
@@ -1053,6 +1062,12 @@ impl OPEN {
                 Err(SmppError::ESME_RSYSERR)
             }
         } else {
+            // SMPP 3.4 §4.1.2 / §4.1.4: a refused bind still gets its _resp, so
+            // the ESME learns the command_status instead of seeing a bare close.
+            error!("Connection from {} on server {} with system_id {} was rejected with error {:?}, closing TCP connection", connection_information.client_address, connection_information.server_address, bind_receiver.system_id, bind_receiver_resp.get_error());
+            if let Err(e) = stream.write_all(&bind_receiver_resp.clone().encode()).await {
+                error!("Connection from {} on server {}: could not send the bind_receiver rejection ({}), the peer is gone", connection_information.client_address, connection_information.server_address, e);
+            }
             Err(bind_receiver_resp.get_error())
         }
     }
